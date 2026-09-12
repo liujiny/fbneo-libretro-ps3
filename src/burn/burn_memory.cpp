@@ -36,12 +36,16 @@ UINT8 *_BurnMalloc(INT32 size, char *file, INT32 line)
 		if (memptr[i] == NULL) {
 			INT32 spill = (OOB_CHECKER) ? OOB_CHECK : 0;
 			#if defined(__PS3__)
-			memptr[i] = (UINT8*)pool_malloc(size + spill);
+			ps3_mem_diag_set_next_site(file, line);
+			memptr[i] = (UINT8*)pool_malloc_tagged(size + spill, size);
 #else
 			memptr[i] = (UINT8*)malloc(size + spill);
 #endif
 
 			if (memptr[i] == NULL) {
+				#if defined(__PS3__) && defined(PS3_MEMORY_DIAGNOSTIC) && PS3_MEMORY_DIAGNOSTIC
+				bprintf(0, _T("[PS3 MEM] BurnMalloc TOTAL_FAILURE requested_size=%d allocator_size=%d at %S:%d\n"), size, size + spill, file, line);
+				#endif
 				bprintf (0, _T("BurnMalloc failed to allocate %d bytes of memory!\n"), size);
 				return NULL;
 			}
@@ -60,6 +64,9 @@ UINT8 *_BurnMalloc(INT32 size, char *file, INT32 line)
 	}
 
 	bprintf (0, _T("BurnMalloc called too many times!\n"));
+#if defined(__PS3__) && defined(PS3_MEMORY_DIAGNOSTIC) && PS3_MEMORY_DIAGNOSTIC
+	bprintf(0, _T("[PS3 MEM] BurnMalloc TOTAL_FAILURE reason=tracking_table_full requested_size=%d at %S:%d\n"), size, file, line);
+#endif
 
 	return NULL; // Freak out!
 }
@@ -100,7 +107,8 @@ UINT8 *BurnRealloc(void *ptr, INT32 size)
 			check_overwrite(i, MEM_REALLOC);
 			INT32 spill = (OOB_CHECKER) ? OOB_CHECK : 0;
 			#if defined(__PS3__)
-			UINT8 *replacement = (UINT8*)pool_malloc(size + spill);
+			ps3_mem_diag_set_next_site("BurnRealloc", 0);
+			UINT8 *replacement = (UINT8*)pool_malloc_tagged(size + spill, size);
 			if (replacement == NULL) return NULL;
 			memcpy(replacement, ptr, (size < memsize[i]) ? size : memsize[i]);
 			pool_free(ptr);

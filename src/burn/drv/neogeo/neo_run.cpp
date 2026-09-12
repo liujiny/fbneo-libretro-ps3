@@ -70,6 +70,9 @@
  */
 
 #include "neogeo.h"
+#if defined(__PS3__)
+#include "ps3_memory_pool.h"
+#endif
 #include "cd_interface.h"
 #include "burn_ym2610.h"
 #include "bitswap.h"
@@ -548,6 +551,9 @@ static INT32 FindROMs(UINT32 nType, INT32* pOffset, INT32* pNum)
 
 static INT32 LoadRoms()
 {
+#if defined(__PS3__)
+	ps3_mem_diag_stage("NeoGeo_ROM_loading_begin");
+#endif
 	NeoGameInfo info;
 	NeoGameInfo* pInfo = &info;
 
@@ -702,6 +708,9 @@ static INT32 LoadRoms()
 
 //	bprintf(PRINT_NORMAL, _T("%x\n"), nYM2610ADPCMASize[nNeoActiveSlot]);
 
+	#if defined(__PS3__)
+	ps3_mem_diag_set_next_label("NeoZ80ROM");
+	#endif
 	NeoZ80ROM[nNeoActiveSlot] = (UINT8*)BurnMalloc(0x080000);	// Z80 cartridge ROM
 	if (NeoZ80ROM[nNeoActiveSlot] == NULL) {
 		return 1;
@@ -718,10 +727,16 @@ static INT32 LoadRoms()
 //		nSpriteSize[nNeoActiveSlot] = 0x5000000;
 //	}
 
+	#if defined(__PS3__)
+	ps3_mem_diag_set_next_label("NeoSpriteROM");
+	#endif
 	NeoSpriteROM[nNeoActiveSlot] = (UINT8*)BurnMalloc(nSpriteSize[nNeoActiveSlot] < (nNeoTileMask[nNeoActiveSlot] << 7) ? ((nNeoTileMask[nNeoActiveSlot] + 1) << 7) : nSpriteSize[nNeoActiveSlot]);
 	if (NeoSpriteROM[nNeoActiveSlot] == NULL) {
 		return 1;
 	}
+#if defined(__PS3__)
+	ps3_mem_diag_stage("NeoSpriteROM_allocated");
+#endif
 
 /*
 	if ((BurnDrvGetHardwareCode() & HARDWARE_PUBLIC_MASK) == HARDWARE_SNK_DEDICATED_PCB) {
@@ -745,8 +760,16 @@ static INT32 LoadRoms()
 
 	// Load sprite data
 	// nSpriteRomSize - Make sure the 6C ROMs are decrypted correctly (NeoCMCDecrypt).
-	NeoLoadSprites(pInfo->nSpriteOffset, pInfo->nSpriteNum, NeoSpriteROM[nNeoActiveSlot], nSpriteRomSize);
+	if (NeoLoadSprites(pInfo->nSpriteOffset, pInfo->nSpriteNum, NeoSpriteROM[nNeoActiveSlot], nSpriteRomSize)) {
+		return 1;
+	}
+#if defined(__PS3__)
+	ps3_mem_diag_stage("NeoGeo_sprite_ROM_loaded");
+#endif
 
+	#if defined(__PS3__)
+	ps3_mem_diag_set_next_label("NeoTextROM");
+	#endif
 	NeoTextROM[nNeoActiveSlot] = (UINT8*)BurnMalloc(nNeoTextROMSize[nNeoActiveSlot]);
 	if (NeoTextROM[nNeoActiveSlot] == NULL) {
 		return 1;
@@ -792,12 +815,18 @@ static INT32 LoadRoms()
 
 	bprintf(0, _T("code size: %x\n"), nCodeSize[nNeoActiveSlot]);
 
+	#if defined(__PS3__)
+	ps3_mem_diag_set_next_label("Neo68KROM");
+	#endif
 	Neo68KROM[nNeoActiveSlot] = (UINT8*)BurnMalloc(nCodeSize[nNeoActiveSlot]);	// 68K cartridge ROM
 	if (Neo68KROM[nNeoActiveSlot] == NULL) {
 		return 1;
 	}
 	Neo68KROMActive = Neo68KROM[nNeoActiveSlot];
 	Neo68KFix[nNeoActiveSlot] = Neo68KROM[nNeoActiveSlot];
+#if defined(__PS3__)
+	ps3_mem_diag_stage("Neo68KROM_allocated");
+#endif
 
 	// Load the roms into memory
 	if (BurnDrvGetHardwareCode() & HARDWARE_SNK_SMA_PROTECTION) {
@@ -817,11 +846,17 @@ static INT32 LoadRoms()
 
 	// Decode sprite data
 	NeoDecodeSprites(NeoSpriteROM[nNeoActiveSlot], nSpriteSize[nNeoActiveSlot]);
+#if defined(__PS3__)
+	ps3_mem_diag_stage("NeoGeo_ROM_decode_rearrange_end");
+#endif
 
 	if (pInfo->nADPCMANum) {
 		struct BurnRomInfo ri;
 		UINT8* pADPCMData;
 
+		#if defined(__PS3__)
+		ps3_mem_diag_set_next_label("NeoADPCM_A_ROM");
+		#endif
 		YM2610ADPCMAROM[nNeoActiveSlot]	= (UINT8*)BurnMalloc(nYM2610ADPCMASize[nNeoActiveSlot]);
 		if (YM2610ADPCMAROM[nNeoActiveSlot] == NULL) {
 			return 1;
@@ -839,6 +874,9 @@ static INT32 LoadRoms()
 		}
 
 		NeoLoadADPCM(pInfo->nADPCMOffset, pInfo->nADPCMANum, pADPCMData);
+#if defined(__PS3__)
+		ps3_mem_diag_stage("NeoADPCM_A_loaded");
+#endif
 
 		if (BurnDrvGetHardwareCode() & HARDWARE_SNK_SWAPV) {
 			for (INT32 i = 0; i < 0x00200000; i++) {
@@ -850,12 +888,18 @@ static INT32 LoadRoms()
 	}
 
 	if (pInfo->nADPCMBNum) {
+		#if defined(__PS3__)
+		ps3_mem_diag_set_next_label("NeoADPCM_B_ROM");
+		#endif
 		YM2610ADPCMBROM[nNeoActiveSlot]	= (UINT8*)BurnMalloc(nYM2610ADPCMBSize[nNeoActiveSlot]);
 		if (YM2610ADPCMBROM[nNeoActiveSlot] == NULL) {
 			return 1;
 		}
 
 		NeoLoadADPCM(pInfo->nADPCMOffset + pInfo->nADPCMANum, pInfo->nADPCMBNum, YM2610ADPCMBROM[nNeoActiveSlot]);
+#if defined(__PS3__)
+		ps3_mem_diag_stage("NeoADPCM_B_loaded");
+#endif
 	} else {
 		YM2610ADPCMBROM[nNeoActiveSlot] = YM2610ADPCMAROM[nNeoActiveSlot];
 		nYM2610ADPCMBSize[nNeoActiveSlot] = nYM2610ADPCMASize[nNeoActiveSlot];
@@ -863,6 +907,9 @@ static INT32 LoadRoms()
 
 	// All reset to 0
 	memset(pNRI, 0, sizeof(NeoReallocInfo));
+#if defined(__PS3__)
+	ps3_mem_diag_stage("NeoGeo_ROM_loading_end");
+#endif
 
 	return 0;
 }
@@ -3935,6 +3982,9 @@ static INT32 NeoInitCommon()
 
 		RAMIndex();													// Get amount of memory needed
 		nLen = RAMEnd - (UINT8*)0;
+		#if defined(__PS3__)
+		ps3_mem_diag_set_next_label("NeoAllRAM");
+		#endif
 		if ((AllRAM = (UINT8*)BurnMalloc(nLen)) == NULL) {		// Allocate memory
 			return 1;
 		}
@@ -4220,6 +4270,9 @@ static bool recursing = false;
 
 INT32 NeoInit()
 {
+#if defined(__PS3__)
+	ps3_mem_diag_stage("NeoGeo_init_begin");
+#endif
 	nNeo68KRAMLen = ((nNeo68KRAMHack > 0) || (nIpsDrvDefine & IPS_NEO_RAMHACK) || (NULL != pDataRomDesc)) ? 0x100000 : 0x010000;
 
 	if (recursing) {
@@ -4312,6 +4365,9 @@ INT32 NeoInit()
 
 		ROMIndex();													// Get amount of memory needed
 		nLen = ROMEnd - (UINT8*)0;
+		#if defined(__PS3__)
+		ps3_mem_diag_set_next_label("NeoAllROM");
+		#endif
 		if ((AllROM = (UINT8*)BurnMalloc(nLen)) == NULL) {		// Allocate memory
 			return 1;
 		}
@@ -4623,6 +4679,11 @@ static INT32 in_cd_ffwd = 0;
 
 INT32 NeoFrame()
 {
+#ifdef __PS3__
+	static unsigned ps3_neo_diag_frame;
+	const bool ps3_neo_diag_active = ps3_neo_diag_frame < 5;
+	if (ps3_neo_diag_active) ps3_mem_diag_stage("NeoFrame_entry");
+#endif
 	//bprintf(0, _T("%X,"), SekReadWord(0x108)); // show game-id
 
 	if (NeoReset) {							   						// Reset machine
@@ -4836,6 +4897,9 @@ INT32 NeoFrame()
 
 	SekNewFrame();
 	ZetNewFrame();
+#ifdef __PS3__
+	if (ps3_neo_diag_active) ps3_mem_diag_stage("NeoFrame_before_CPU_execution");
+#endif
 
 	SekOpen(0);
 	ZetOpen(0);
@@ -4933,6 +4997,9 @@ INT32 NeoFrame()
 
 	// Display starts here
 	if (pBurnDraw) {
+#ifdef __PS3__
+		if (ps3_neo_diag_active) ps3_mem_diag_stage("NeoFrame_before_render_setup");
+#endif
 		NeoUpdatePalette();											// Update the palette
 		NeoClearScreen();
 		NeoSpriteCalcLimit();
@@ -5074,6 +5141,9 @@ INT32 NeoFrame()
 		}
 		if (bNeoEnableText && pBurnDraw) NeoRenderText();				// Render text layer
 	}
+#ifdef __PS3__
+	if (ps3_neo_diag_active) ps3_mem_diag_stage("NeoFrame_after_sprite_text_render");
+#endif
 
 	if ( ((nNeoSystemType & NEO_SYS_CD) && (nff0004 & 0x0030) == 0x0030) || (~nNeoSystemType & NEO_SYS_CD) ) {
 #if 0 || defined LOG_IRQ
@@ -5112,10 +5182,16 @@ INT32 NeoFrame()
 	// Update the sound until the end of the frame
 
 	nCycles68KSync = SekTotalCycles();
+#ifdef __PS3__
+	if (ps3_neo_diag_active) ps3_mem_diag_stage("NeoFrame_before_Z80_YM2610");
+#endif
 	BurnTimerEndFrame(nCyclesTotal[1]);
 	if (pBurnSoundOut) {
 		BurnYM2610Update(pBurnSoundOut, nBurnSoundLen);
 	}
+#ifdef __PS3__
+	if (ps3_neo_diag_active) ps3_mem_diag_stage("NeoFrame_after_Z80_YM2610");
+#endif
 
 	// Update the uPD4990 until the end of the frame
 	uPD4990AUpdate();
@@ -5170,5 +5246,9 @@ INT32 NeoFrame()
 		in_cd_ffwd = 0;
 	}
 
+#ifdef __PS3__
+	if (ps3_neo_diag_active) ps3_mem_diag_stage("NeoFrame_exit");
+	ps3_neo_diag_frame++;
+#endif
 	return 0;
 }

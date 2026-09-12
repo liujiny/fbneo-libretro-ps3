@@ -2,6 +2,9 @@
 #include "retro_common.h"
 #include "retro_input.h"
 #include "burn_gun.h"
+#ifdef __PS3__
+#include "ps3_memory_pool.h"
+#endif
 
 // TODO :
 // - implement RETROPAD_8PANEL for 8-buttons panels/fightsticks
@@ -3566,10 +3569,21 @@ void InputExit()
 	bLibretroSupportsBitmasks = false;
 }
 
-void retro_set_input_state(retro_input_state_t cb) { input_cb = cb; }
-void retro_set_input_poll(retro_input_poll_t cb) { poll_cb = cb; }
+void retro_set_input_state(retro_input_state_t cb) { input_cb = cb;
+#ifdef __PS3__
+	ps3_mem_diag_stage("retro_set_input_state");
+#endif
+}
+void retro_set_input_poll(retro_input_poll_t cb) { poll_cb = cb;
+#ifdef __PS3__
+	ps3_mem_diag_stage("retro_set_input_poll");
+#endif
+}
 void retro_set_controller_port_device(unsigned port, unsigned device)
 {
+#ifdef __PS3__
+	ps3_mem_diag_stage("retro_set_controller_port_device_entry");
+#endif
 	// Retroarch is ignoring what i want, so let's force valid values
 	if (nBurnDrvActive != ~0U)
 	{
@@ -3620,4 +3634,7 @@ void retro_set_controller_port_device(unsigned port, unsigned device)
 		if (bControllersSetOnce)
 			RefreshControllers();
 	}
+#ifdef __PS3__
+	ps3_mem_diag_stage("retro_set_controller_port_device_exit");
+#endif
 }

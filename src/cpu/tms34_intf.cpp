@@ -39,7 +39,17 @@ struct TMS34010MemoryMap
 	pTMS34010ScanlineRender scanlineRenderCallback;
 };
 
+#ifdef __PS3__
+/*
+ * The page-pointer tables are 32 MiB on the 32-bit PPU build
+ * (MAX_CPUS * PAGE_COUNT * 2 * sizeof(UINT8*)).  They are only needed by
+ * TMS340x0 drivers, so keep them out of the permanent PS3 .bss and create
+ * them when a TMS CPU is actually initialised.
+ */
+static TMS34010MemoryMap *MapStore = NULL;
+#else
 static TMS34010MemoryMap MapStore[MAX_CPUS];
+#endif
 static TMS34010MemoryMap *g_mmap = NULL;
 static INT32 active_cpu = -1;
 static INT32 total_cpus = 0;
@@ -137,7 +147,20 @@ static void TMS34010Init_Internal(INT32 nCpu, INT32 nType)
 	}
 
 	if (nCpu == 0) {
+	#ifdef __PS3__
+		if (MapStore == NULL) {
+			MapStore = (TMS34010MemoryMap*)calloc(MAX_CPUS, sizeof(TMS34010MemoryMap));
+			if (MapStore == NULL) {
+				bprintf(PRINT_ERROR, _T("TMS34010Init_Internal: unable to allocate map store.\n"));
+				return;
+			}
+		}
+	#endif
+	#ifdef __PS3__
+		memset(MapStore, 0, MAX_CPUS * sizeof(TMS34010MemoryMap));
+	#else
 		memset(&MapStore, 0, sizeof(MapStore));
+	#endif
 	}
 
 	total_cpus = nCpu + 1;
@@ -192,6 +215,10 @@ void TMS34010Exit()
 
 	total_cpus = 0;
 	active_cpu = -1;
+	#ifdef __PS3__
+		free(MapStore);
+		MapStore = NULL;
+	#endif
 }
 
 void TMS34010SetCpuCyclesPerFrame(INT32 cpf)

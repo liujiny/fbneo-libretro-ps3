@@ -233,10 +233,19 @@ else ifeq ($(platform), qnx)
 # Lightweight PS3 Homebrew SDK
 else ifneq (,$(filter $(platform), ps3 psl1ght))
 	TARGET := $(TARGET_NAME)_libretro_$(platform).a
+	# Windows CreateProcess has a short command-line limit.  Archive the very
+	# large FBNeo object list in bounded batches instead of one ar invocation.
+	SPLIT_UP_LINK = 1
+	PS3_MEMORY_DIAGNOSTIC ?= 0
+	PS3_MEMORY_POOL_SIZE_MB ?= 64
+	PS3_NATIVE_MEMORY ?= 0
 	# Keep FBNeo's many independent objects from exhausting the PPU 64 KiB TOC
 	# when linked into the PS3 RetroArch frontend.
 	PLATFORM_DEFINES += -D__PS3__ -mminimal-toc \
-		-DFRONTEND_SUPPORTS_RGB565=1 -DFBNEO_DEFAULT_AUDIO_RATE=44100
+		-DFRONTEND_SUPPORTS_RGB565=1 -DFBNEO_DEFAULT_AUDIO_RATE=44100 \
+		-DPS3_MEMORY_DIAGNOSTIC=$(PS3_MEMORY_DIAGNOSTIC) \
+		-DPS3_MEMORY_POOL_SIZE_MB=$(PS3_MEMORY_POOL_SIZE_MB) \
+		-DPS3_NATIVE_MEMORY=$(PS3_NATIVE_MEMORY)
 	# Cell PPU release tuning; appended after generic rules below.
 	PS3_PERF_FLAGS := -O3 -maltivec -mabi=altivec -fstrict-aliasing \
 		-fomit-frame-pointer -ffast-math

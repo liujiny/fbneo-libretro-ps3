@@ -5,6 +5,9 @@
 #include "timer.h"
 //#include "burn_sound.h" // included in burnint.h
 #include "driverlist.h"
+#if defined(__PS3__) && defined(__LIBRETRO__)
+#include "ps3_memory_pool.h"
+#endif
 
 #ifdef BUILD_WIN32
 #include "mbtwc.h"
@@ -115,6 +118,12 @@ static void BurnGameListInit()
 		pszFullNameW = (wchar_t**)malloc(nBurnDrvCount * sizeof(wchar_t*));
 
 		if ((NULL != pszShortName) && (NULL != pszFullNameA) && (NULL != pszFullNameW)) {
+#if defined(__PS3__) && defined(__LIBRETRO__)
+			memset(pszShortName, 0, nBurnDrvCount * sizeof(char*));
+			memset(pszFullNameA, 0, nBurnDrvCount * sizeof(char*));
+			memset(pszFullNameW, 0, nBurnDrvCount * sizeof(wchar_t*));
+			ps3_mem_diag_note("BurnGameList lazy_driver_count", nBurnDrvCount);
+#else
 			for (UINT32 i = 0; i < nBurnDrvCount; i++) {
 				pszShortName[i] = (char*   )malloc(100      * sizeof(char));
 				pszFullNameA[i] = (char*   )malloc(MAX_PATH * sizeof(char));
@@ -139,9 +148,51 @@ static void BurnGameListInit()
 				pDriver[i]->szFullNameW = pszFullNameW[i];
 #endif
 			}
+#endif
 		}
 
 }
+
+static char* BurnEnsureShortNameWritable(UINT32 i)
+{
+	if (i >= nBurnDrvCount || pszShortName == NULL) return NULL;
+	if (pszShortName[i] == NULL) {
+		pszShortName[i] = (char*)malloc(100);
+		if (pszShortName[i] == NULL) return NULL;
+		memset(pszShortName[i], 0, 100);
+		strncpy(pszShortName[i], pDriver[i]->szShortName, 99);
+		pDriver[i]->szShortName = pszShortName[i];
+	}
+	return pszShortName[i];
+}
+
+static char* BurnEnsureFullNameAWritable(UINT32 i)
+{
+	if (i >= nBurnDrvCount || pszFullNameA == NULL) return NULL;
+	if (pszFullNameA[i] == NULL) {
+		pszFullNameA[i] = (char*)malloc(MAX_PATH);
+		if (pszFullNameA[i] == NULL) return NULL;
+		memset(pszFullNameA[i], 0, MAX_PATH);
+		strncpy(pszFullNameA[i], pDriver[i]->szFullNameA, MAX_PATH - 1);
+		pDriver[i]->szFullNameA = pszFullNameA[i];
+	}
+	return pszFullNameA[i];
+}
+
+#if defined(_UNICODE)
+static wchar_t* BurnEnsureFullNameWWritable(UINT32 i)
+{
+	if (i >= nBurnDrvCount || pszFullNameW == NULL) return NULL;
+	if (pszFullNameW[i] == NULL) {
+		pszFullNameW[i] = (wchar_t*)malloc(MAX_PATH * sizeof(wchar_t));
+		if (pszFullNameW[i] == NULL) return NULL;
+		wmemset(pszFullNameW[i], 0, MAX_PATH);
+		if (pDriver[i]->szFullNameW) wcsncpy(pszFullNameW[i], pDriver[i]->szFullNameW, MAX_PATH - 1);
+		pDriver[i]->szFullNameW = pszFullNameW[i];
+	}
+	return pszFullNameW[i];
+}
+#endif
 
 static void BurnGameListExit()
 {
@@ -520,6 +571,7 @@ static INT32 BurnDrvSetFullNameA(char* szName, UINT32 i = nBurnDrvActive)
 	// Preventing the emergence of ~0U
 	// If not NULL, then FullNameA is customized
 	if ((i >= 0) && (NULL != szName)) {
+		if (BurnEnsureFullNameAWritable(i) == NULL) return -1;
 		memset(pszFullNameA[i], '\0', MAX_PATH * sizeof(char));
 		strcpy(pszFullNameA[i], szName);
 
@@ -534,6 +586,7 @@ INT32 BurnDrvSetFullNameW(TCHAR* szName, INT32 i = nBurnDrvActive)
 	if ((-1 == i) || (NULL == szName)) return -1;
 
 #if defined (_UNICODE)
+	if (BurnEnsureFullNameWWritable(i) == NULL) return -1;
 	memset(pszFullNameW[i], '\0', MAX_PATH * sizeof(wchar_t));
 	wcscpy(pszFullNameW[i], szName);
 #endif
@@ -548,6 +601,7 @@ void BurnLocalisationSetName(char* szName, TCHAR* szLongName)
 		nBurnDrvActive = i;
 		if (!strcmp(szName, pDriver[i]->szShortName)) {
 //			pDriver[i]->szFullNameW = szLongName;
+			if (BurnEnsureFullNameWWritable(i) == NULL) return;
 			memset(pszFullNameW[i], '\0', MAX_PATH * sizeof(wchar_t));
 			_tcscpy(pszFullNameW[i], szLongName);
 		}
@@ -617,6 +671,7 @@ extern "C" INT32 BurnDrvGetZipName(char** pszName, UINT32 i)
 extern "C" INT32 BurnDrvSetZipName(char* szName, INT32 i)
 {
 	if ((NULL == szName) || (-1 == i)) return -1;
+	if (BurnEnsureShortNameWritable(i) == NULL) return -1;
 
 	strcpy(pszShortName[i], szName);
 

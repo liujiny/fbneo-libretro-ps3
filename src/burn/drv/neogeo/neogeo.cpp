@@ -2,6 +2,9 @@
 
 #include "neogeo.h"
 #include "bitswap.h"
+#if defined(__PS3__)
+#include "ps3_memory_pool.h"
+#endif
 
 INT32 nNeoProtectionXor = -1;
 
@@ -96,6 +99,9 @@ INT32 NeoLoadSprites(INT32 nOffset, INT32 nNum, UINT8* pDest, UINT32 nSpriteSize
 		// The temporary memory length here corresponds to the setting of [neo_run.cpp] in the ips environment.
 		UINT32 nBuf1Len = bDoIpsPatch ? (nRomSize << 1) + nIpsMemExpLen[GRA1_ROM] : nRomSize << 1;
 
+#if defined(__PS3__)
+		ps3_mem_diag_set_next_label("NeoCMCDecryptTemp");
+#endif
 		pBuf1 = (UINT8*)BurnMalloc(nBuf1Len);
 		if (pBuf1 == NULL) {
 			return 1;
@@ -104,8 +110,12 @@ INT32 NeoLoadSprites(INT32 nOffset, INT32 nNum, UINT8* pDest, UINT32 nSpriteSize
 		if ((BurnDrvGetHardwareCode() & HARDWARE_PUBLIC_MASK) == HARDWARE_SNK_DEDICATED_PCB) {
 //			dProgress *= 0.75;
 
+#if defined(__PS3__)
+			ps3_mem_diag_set_next_label("NeoPCBDecryptTemp");
+#endif
 			pBuf2 = (UINT8*)BurnMalloc(nRomSize * 2);
 			if (pBuf2 == NULL) {
+				BurnFree(pBuf1);
 				return 1;
 			}
 		}
@@ -181,8 +191,14 @@ INT32 NeoLoadSprites(INT32 nOffset, INT32 nNum, UINT8* pDest, UINT32 nSpriteSize
 			}
 		}
 
+#if defined(__PS3__)
+		ps3_mem_diag_stage("NeoCMCDecryptTemp_before_free");
+#endif
 		BurnFree(pBuf2);
 		BurnFree(pBuf1);
+#if defined(__PS3__)
+		ps3_mem_diag_stage("NeoCMCDecryptTemp_after_free");
+#endif
 	} else {
 		nSpriteSize = 0;
 

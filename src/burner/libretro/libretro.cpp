@@ -8,6 +8,9 @@
 #include "burnint.h"
 #if defined(__PS3__)
 #include "ps3_memory_pool.h"
+static bool ps3_mem_first_frame_pending;
+static unsigned ps3_diag_frame_number;
+static INT32 ps3_diag_last_burn_frame_ret;
 #endif
 #include "aud_dsp.h"
 
@@ -265,9 +268,21 @@ static INT32 __cdecl libretro_bprintf(INT32 nStatus, TCHAR* szFormat, ...)
 INT32 (__cdecl *bprintf) (INT32 nStatus, TCHAR* szFormat, ...) = libretro_bprintf;
 
 // libretro globals
-void retro_set_video_refresh(retro_video_refresh_t cb) { video_cb = cb; }
-void retro_set_audio_sample(retro_audio_sample_t) {}
-void retro_set_audio_sample_batch(retro_audio_sample_batch_t cb) { audio_batch_cb = cb; }
+void retro_set_video_refresh(retro_video_refresh_t cb) { video_cb = cb;
+#ifdef __PS3__
+	ps3_mem_diag_stage("retro_set_video_refresh");
+#endif
+}
+void retro_set_audio_sample(retro_audio_sample_t) {
+#ifdef __PS3__
+	ps3_mem_diag_stage("retro_set_audio_sample");
+#endif
+}
+void retro_set_audio_sample_batch(retro_audio_sample_batch_t cb) { audio_batch_cb = cb;
+#ifdef __PS3__
+	ps3_mem_diag_stage("retro_set_audio_sample_batch");
+#endif
+}
 
 static bool is_dipswitch_active(dipswitch_core_option *dip_option)
 {
@@ -369,6 +384,9 @@ static bool apply_dipswitches_from_variables()
 void retro_set_environment(retro_environment_t cb)
 {
 	environ_cb = cb;
+#ifdef __PS3__
+	ps3_mem_diag_stage("retro_set_environment_entry");
+#endif
 
 	struct retro_core_options_update_display_callback update_display_cb;
 	update_display_cb.callback = apply_dipswitches_from_variables;
@@ -443,12 +461,18 @@ void retro_set_environment(retro_environment_t cb)
 #ifndef __PS3__
 	environ_cb(RETRO_ENVIRONMENT_SET_SUBSYSTEM_INFO, (void*)subsystems);
 #endif
+#ifdef __PS3__
+	ps3_mem_diag_stage("retro_set_environment_exit");
+#endif
 }
 
 extern unsigned int (__cdecl *BurnHighCol) (signed int r, signed int g, signed int b, signed int i);
 
 void retro_get_system_info(struct retro_system_info *info)
 {
+#ifdef __PS3__
+	ps3_mem_diag_stage("retro_get_system_info_entry");
+#endif
 	char *library_version = (char*)calloc(38, sizeof(char));
 
 #ifndef GIT_DATE
@@ -472,6 +496,11 @@ void retro_get_system_info(struct retro_system_info *info)
 #endif
 
 	free(library_version);
+#ifdef __PS3__
+	ps3_mem_diag_note("SYSTEM INFO need_fullpath", info->need_fullpath ? 1 : 0);
+	ps3_mem_diag_note("SYSTEM INFO block_extract", info->block_extract ? 1 : 0);
+	ps3_mem_diag_stage("retro_get_system_info_exit");
+#endif
 }
 
 static void InpDIPSWGetOffset (void)
@@ -651,10 +680,13 @@ static int create_variables_from_dipswitches()
 	return 0;
 }
 
-static TCHAR* nl_remover(TCHAR* str)
+/* Return a trimmed copy without leaking one heap string per cheat field. */
+static std::string nl_remover(const TCHAR* str)
 {
-	TCHAR* tmp = strdup(str);
-	tmp[strcspn(tmp, "\r\n")] = 0;
+	std::string tmp = str ? str : "";
+	size_t end = tmp.find_first_of("\r\n");
+	if (end != std::string::npos)
+		tmp.resize(end);
 	return tmp;
 }
 
@@ -790,7 +822,26 @@ static void ForceFrameStep()
 		nFramesRendered++;
 #endif
 	CheatApply();
+#if defined(__PS3__)
+	if (ps3_diag_frame_number < 5) {
+		ps3_mem_diag_frame_event("before BurnDrvFrame", ps3_diag_frame_number, 0);
+		ps3_mem_diag_stage("before_BurnDrvFrame");
+	}
+	ps3_diag_last_burn_frame_ret = BurnDrvFrame();
+	if (ps3_diag_frame_number < 5) {
+		ps3_mem_diag_frame_event("after BurnDrvFrame ret", ps3_diag_frame_number, ps3_diag_last_burn_frame_ret);
+		ps3_mem_diag_stage("after_BurnDrvFrame");
+	}
+#else
 	BurnDrvFrame();
+#endif
+#if defined(__PS3__)
+	if (ps3_mem_first_frame_pending) {
+		ps3_mem_first_frame_pending = false;
+		ps3_mem_diag_stage("first_frame");
+		ps3_mem_diag_summary("first_frame");
+	}
+#endif
 }
 
 // Non-idiomatic (OutString should be to the left to match strcpy())
@@ -1278,6 +1329,12 @@ void retro_init()
 {
 	struct retro_log_callback log;
 
+#ifdef __PS3__
+	ps3_mem_diag_reset();
+	ps3_mem_diag_stage("retro_init_entry");
+	ps3_mem_diag_probe_enabled();
+#endif
+
 	uint64_t serialization_quirks = RETRO_SERIALIZATION_QUIRK_ENDIAN_DEPENDENT;
 	environ_cb(RETRO_ENVIRONMENT_SET_SERIALIZATION_QUIRKS, &serialization_quirks);
 
@@ -1295,7 +1352,13 @@ void retro_init()
 	environ_cb(RETRO_ENVIRONMENT_GET_MESSAGE_INTERFACE_VERSION, &libretro_msg_interface_version);
 
 	snprintf_nowarn(szAppBurnVer, sizeof(szAppBurnVer), "%x.%x.%x.%02x", nBurnVer >> 20, (nBurnVer >> 16) & 0x0F, (nBurnVer >> 8) & 0xFF, nBurnVer & 0xFF);
+#ifdef __PS3__
+	ps3_mem_diag_stage("BurnLibInit_begin");
+#endif
 	BurnLibInit();
+#ifdef __PS3__
+	ps3_mem_diag_stage("BurnLibInit_end");
+#endif
 #ifdef AUTOGEN_DATS
 	CreateAllDatfiles("dats");
 #endif
@@ -1321,19 +1384,29 @@ void retro_init()
 		HandleMessage(RETRO_LOG_WARN, "[FBNeo] Frontend doesn't support RETRO_ENVIRONMENT_GET_SAVESTATE_CONTEXT\n");
 		HandleMessage(RETRO_LOG_WARN, "[FBNeo] hiscore.dat requires this feature to work in a runahead context\n");
 	}
+#ifdef __PS3__
+	ps3_mem_diag_stage("retro_init_exit");
+#endif
 }
 
 void retro_deinit()
 {
+#ifdef __PS3__
+	ps3_mem_diag_life("retro_deinit ENTER");
+#endif
 	DspExit();
 	BurnLibExit();
 #ifdef __PS3__
+	ps3_mem_diag_summary("core_shutdown");
 	pool_destroy();
 #endif
 }
 
 void retro_reset()
 {
+#ifdef __PS3__
+	ps3_mem_diag_life("retro_reset");
+#endif
 	// no driver loaded, we won't do anything
 	if (gui_show)
 		return;
@@ -1404,10 +1477,21 @@ static void VideoBufferInit()
 		pVidImage = (UINT8*)malloc(nSize);
 	if (pVidImage)
 		memset(pVidImage, 0, nSize);
+#ifdef __PS3__
+	ps3_mem_diag_direct_alloc("VideoBufferInit", nSize, pVidImage, __FILE__, __LINE__);
+#endif
 }
 
 void retro_run()
 {
+#ifdef __PS3__
+	if (ps3_diag_frame_number < 3) {
+		if (ps3_diag_frame_number == 0) ps3_mem_diag_probe_enabled();
+		ps3_mem_diag_life("retro_run ENTER");
+		ps3_mem_diag_frame_event("retro_run ENTER", ps3_diag_frame_number, 0);
+		ps3_mem_diag_stage("retro_run_entry");
+	}
+#endif
 	bool bEnableVideo  = true;
 	bool bEmulateAudio = true;
 	bool bPresentAudio = true;
@@ -1523,7 +1607,16 @@ audio_batch_cb(pAudBuffer, nBurnSoundLen);
 	{
 		if (bLowPassFilterEnabled)
 			DspDo(pBurnSoundOut, nBurnSoundLen);
-audio_batch_cb(pBurnSoundOut, nBurnSoundLen);
+#ifdef __PS3__
+		if (ps3_diag_frame_number < 5) {
+			ps3_mem_diag_frame_event("before audio callback", ps3_diag_frame_number, nBurnSoundLen);
+			ps3_mem_diag_audio(pBurnSoundOut, nBurnSoundLen);
+		}
+#endif
+		audio_batch_cb(pBurnSoundOut, nBurnSoundLen);
+#ifdef __PS3__
+		if (ps3_diag_frame_number < 5) ps3_mem_diag_frame_event("after audio callback", ps3_diag_frame_number, 0);
+#endif
 	}
 
 	if (bVidImageNeedRealloc)
@@ -1534,7 +1627,20 @@ audio_batch_cb(pBurnSoundOut, nBurnSoundLen);
 		pBurnDraw = NULL;
 	}
 
+#ifdef __PS3__
+	if (ps3_diag_frame_number < 5) {
+		ps3_mem_diag_frame_event("before video callback", ps3_diag_frame_number, 0);
+		ps3_mem_diag_video(pBurnDraw, nGameWidth, nGameHeight, nBurnPitch);
+		ps3_mem_diag_stage("before_video_cb");
+	}
+#endif
 	video_cb(pBurnDraw, nGameWidth, nGameHeight, nBurnPitch);
+#ifdef __PS3__
+	if (ps3_diag_frame_number < 5) {
+		ps3_mem_diag_frame_event("after video callback", ps3_diag_frame_number, 0);
+		ps3_mem_diag_stage("after_video_cb");
+	}
+#endif
 
 	bool updated = false;
 	if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &updated) && updated)
@@ -1567,6 +1673,13 @@ audio_batch_cb(pBurnSoundOut, nBurnSoundLen);
 		if (old_nFrameskipType != nFrameskipType)
 			bUpdateAudioLatency = true;
 	}
+#ifdef __PS3__
+	if (ps3_diag_frame_number < 5) {
+		ps3_mem_diag_stage("retro_run_exit");
+		ps3_mem_diag_frame_event("retro_run EXIT", ps3_diag_frame_number, 0);
+	}
+	ps3_diag_frame_number++;
+#endif
 }
 
 void retro_cheat_reset() {}
@@ -1712,6 +1825,9 @@ static void AudioBufferInit(INT32 sample_rate, INT32 fps)
 		pAudBuffer = (int16_t*)malloc(nSize);
 	if (pAudBuffer)
 		memset(pAudBuffer, 0, nSize);
+#ifdef __PS3__
+	ps3_mem_diag_direct_alloc("AudioBufferInit", nSize, pAudBuffer, __FILE__, __LINE__);
+#endif
 	nBurnSoundLen = nAudSegLen;
 }
 
@@ -1938,6 +2054,9 @@ static bool SetCDEmuImage(const char* path)
 	}
 
 	strcpy(CDEmuImage, path);
+	#ifdef __PS3__
+	ps3_mem_diag_life("retro_load_game RETURN true");
+	#endif
 	return true;
 }
 #endif
@@ -2032,16 +2151,25 @@ static bool retro_load_game_common()
 	}
 #endif
 
-	nBurnDrvActive = ((NULL != pDataRomDesc) && (-1 != pRDI->nDescCount)) ? pRDI->nDriverId : BurnDrvGetIndexByName(g_driver_name);
+		nBurnDrvActive = ((NULL != pDataRomDesc) && (-1 != pRDI->nDescCount)) ? pRDI->nDriverId : BurnDrvGetIndexByName(g_driver_name);
 	if (nBurnDrvActive < nBurnDrvCount) {
+	#ifdef __PS3__
+		ps3_mem_diag_stage("load_after_driver_selection");
+	#endif
 
 #ifdef __PS3__
+		ps3_mem_diag_reset();
+		ps3_mem_first_frame_pending = true;
+		ps3_diag_frame_number = 0;
+		ps3_mem_diag_stage("retro_load_game_begin");
 		/* CPS3 needs one very large contiguous allocation. Reserving the normal
 		 * 64 MiB small-allocation pool leaves too little PS3 user memory for it. */
-		if ((BurnDrvGetHardwareCode() & HARDWARE_PUBLIC_MASK) == HARDWARE_CAPCOM_CPS3 ||
+		if ((BurnDrvGetHardwareCode() & HARDWARE_PUBLIC_MASK) == HARDWARE_SNK_NEOGEO ||
+			(BurnDrvGetHardwareCode() & HARDWARE_PUBLIC_MASK) == HARDWARE_CAPCOM_CPS3 ||
 			(BurnDrvGetHardwareCode() & HARDWARE_PUBLIC_MASK) == HARDWARE_IGS_PGM ||
 			(BurnDrvGetHardwareCode() & HARDWARE_PUBLIC_MASK) == HARDWARE_CAVE_CV1000) {
-			HandleMessage(RETRO_LOG_INFO, "[FBNeo] PS3: large-memory board detected; 64 MB pool disabled, using aligned direct allocations.\n");
+			HandleMessage(RETRO_LOG_INFO, "[FBNeo] PS3: large-memory board detected; fixed pool disabled, using tagged native/direct allocations.\n");
+			ps3_mem_diag_note("effective_game_pool_bytes", 0);
 		} else if (!pool_init()) {
 			HandleMessage(RETRO_LOG_WARN, "[FBNeo] PS3 64 MB memory pool unavailable; using aligned fallback allocations.\n");
 		} else {
@@ -2051,6 +2179,12 @@ static bool retro_load_game_common()
 
 		HandleMessage(RETRO_LOG_INFO, "[FBNeo] Romset name: %s\n", g_driver_name);
 		HandleMessage(RETRO_LOG_INFO, "[FBNeo] Romset description: %s\n", BurnDrvGetTextA(DRV_FULLNAME));
+#ifdef __PS3__
+		HandleMessage(RETRO_LOG_INFO, "[PS3 MEM] Game: %s\n", g_driver_name);
+		HandleMessage(RETRO_LOG_INFO, "[PS3 MEM] Driver: %s\n", BurnDrvGetTextA(DRV_FULLNAME));
+		HandleMessage(RETRO_LOG_INFO, "[PS3 MEM] Hardware: %s\n",
+			((BurnDrvGetHardwareCode() & HARDWARE_PUBLIC_MASK) == HARDWARE_SNK_NEOGEO) ? "NeoGeo" : "other");
+#endif
 
 		// If the game is marked as not working, let's stop here
 		if (!(BurnDrvIsWorking())) {
@@ -2111,6 +2245,9 @@ static bool retro_load_game_common()
 
 		// Send core options to frontend
 		set_environment();
+	#ifdef __PS3__
+		ps3_mem_diag_stage("load_after_core_options");
+	#endif
 
 		// Cheats & Ipses & romdatas should be avoided while machine is initializing, reset them to default state before boot
 		reset_cheats_from_variables();
@@ -2165,11 +2302,17 @@ static bool retro_load_game_common()
 			goto end;
 		}
 		HandleMessage(RETRO_LOG_INFO, "[FBNeo] No missing files, proceeding\n");
+	#ifdef __PS3__
+		ps3_mem_diag_stage("load_after_open_archive");
+	#endif
 
 		// Announcing to fbneo which samplerate we want
 		// Some game drivers won't initialize with an undefined nBurnSoundLen
 		nBurnSoundRate = g_audio_samplerate;
 		AudioBufferInit(nBurnSoundRate, 6000);
+	#ifdef __PS3__
+		ps3_mem_diag_stage("load_after_initial_audio_buffer");
+	#endif
 		HandleMessage(RETRO_LOG_INFO, "[FBNeo] Samplerate set to %d\n", nBurnSoundRate);
 
 #if defined(BUILD_NEOGEO) || defined(BUILD_PCE)
@@ -2217,6 +2360,9 @@ static bool retro_load_game_common()
 		if (!apply_dipswitches_from_variables())
 			set_dipswitches_visibility();
 		HandleMessage(RETRO_LOG_INFO, "[FBNeo] Applied dipswitches from core options\n");
+	#ifdef __PS3__
+		ps3_mem_diag_stage("load_before_BurnDrvInit");
+	#endif
 
 #ifdef BUILD_NEOGEO
 		// Override the NeoGeo bios DIP Switch by the main one (for the moment)
@@ -2228,6 +2374,9 @@ static bool retro_load_game_common()
 		bSpeedLimit60hz = false;
 
 		// Initialize game driver
+#ifdef __PS3__
+		ps3_mem_diag_stage("BurnDrvInit_begin");
+#endif
 		if(BurnDrvInit() == 0)
 			HandleMessage(RETRO_LOG_INFO, "[FBNeo] Initialized driver for %s\n", g_driver_name);
 		else
@@ -2237,6 +2386,10 @@ static bool retro_load_game_common()
 			HandleMessage(RETRO_LOG_ERROR, "[FBNeo] This is unexpected, you should probably report it.\n");
 			goto end;
 		}
+#ifdef __PS3__
+		ps3_mem_diag_stage("BurnDrvInit_end");
+		ps3_mem_diag_summary("game_load_success");
+#endif
 
 #ifdef BUILD_NEOGEO
 		// MemCard has to be inserted after emulation is started
@@ -2313,6 +2466,10 @@ static bool retro_load_game_common()
 	return true;
 
 end:
+#ifdef __PS3__
+	ps3_mem_diag_stage("game_load_failure");
+	ps3_mem_diag_summary("game_load_failure");
+#endif
 	if (nBurnDrvActive != ~0U) {
 		BurnDrvExit();
 		nBurnDrvActive = ~0U;
@@ -2425,6 +2582,10 @@ bool retro_load_game(const struct retro_game_info *info)
 {
 	if (!info)
 		return false;
+#ifdef __PS3__
+	ps3_mem_diag_stage("retro_load_game_entry");
+	ps3_mem_diag_game_info(info->path, info->data, info->size);
+#endif
 
 #if defined(BUILD_NEOGEO) || defined(BUILD_PCE)
 	CDEmuImage[0] = '\0';
@@ -2580,7 +2741,11 @@ bool retro_load_game(const struct retro_game_info *info)
 		extract_basename(g_driver_name, szRomsetPath, sizeof(g_driver_name), prefix);
 	}
 
-	return retro_load_game_common();
+	bool loaded = retro_load_game_common();
+#ifdef __PS3__
+	if (loaded) ps3_mem_diag_life("retro_load_game RETURN true");
+#endif
+	return loaded;
 }
 
 bool retro_load_game_special(unsigned game_type, const struct retro_game_info *info, size_t)
@@ -2707,6 +2872,10 @@ bool retro_load_game_special(unsigned game_type, const struct retro_game_info *i
 
 void retro_unload_game(void)
 {
+#ifdef __PS3__
+	ps3_mem_diag_life("retro_unload_game ENTER");
+	ps3_mem_diag_stage("retro_unload_game_begin");
+#endif
 	if (nBurnDrvActive != ~0U)
 	{
 #ifdef BUILD_PGM2
@@ -2750,6 +2919,9 @@ void retro_unload_game(void)
 	CheevosExit();
 	RomDataExit();
 	IpsPatchExit();
+#ifdef __PS3__
+	ps3_mem_diag_summary("retro_unload_game_end");
+#endif
 }
 
 static void retro_incomplete_exit()
