@@ -1,0 +1,352 @@
+name: CI FBNeo PS3 PSL1GHT
+
+on:
+  push:
+    branches: [source-main]
+
+  pull_request:
+    branches: [source-main]
+
+  workflow_dispatch:
+
+  repository_dispatch:
+    types: [run_build]
+
+permissions:
+  contents: read
+
+env:
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    container:
+      image: reallibretroretroarch/libretro-build-psl1ght:latest
+      options: --user root
+
+    steps:
+      # ==========================================================
+      # Checkout
+      # ==========================================================
+
+      - name: Checkout FBNeo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Checkout RetroArch
+        uses: actions/checkout@v4
+        with:
+          repository: libretro/RetroArch
+          path: retroarch
+          fetch-depth: 1
+
+      # ==========================================================
+      # Prepare diagnostics
+      # ==========================================================
+
+      - name: Prepare diagnostics
+        shell: bash
+        run: |
+          set -eu
+
+          mkdir -p "$GITHUB_WORKSPACE/ci-logs"
+          mkdir -p "$GITHUB_WORKSPACE/dist/cores"
+          mkdir -p "$GITHUB_WORKSPACE/dist/salamander"
+
+          {
+            echo "========================================"
+            echo "PSL1GHT environment"
+            echo "========================================"
+
+            echo "PS3DEV=${PS3DEV:-<unset>}"
+            echo "PSL1GHT=${PSL1GHT:-<unset>}"
+            echo "PORTLIBS=${PORTLIBS:-<unset>}"
+
+            echo
+            echo "========================================"
+            echo "Toolchain"
+            echo "========================================"
+
+            command -v ppu-gcc || true
+            command -v ppu-g++ || true
+            command -v ppu-ar || true
+            command -v ppu-nm || true
+            command -v make || true
+
+            echo
+
+            ppu-gcc --version || true
+
+            echo
+            echo "========================================"
+            echo "Source revisions"
+            echo "========================================"
+
+            echo "FBNeo:"
+            git rev-parse HEAD
+
+            echo "RetroArch:"
+            git -C retroarch rev-parse HEAD
+
+          } | tee "$GITHUB_WORKSPACE/ci-logs/environment.log"
+
+          test -n "${PS3DEV:-}"
+          test -n "${PSL1GHT:-}"
+
+          command -v ppu-gcc >/dev/null
+          command -v ppu-g++ >/dev/null
+          command -v ppu-ar >/dev/null
+
+      # ==========================================================
+      # Build FBNeo static core
+      # ==========================================================
+
+      - name: Clean FBNeo PSL1GHT core
+        working-directory: src/burner/libretro
+        shell: bash
+        run: |
+          set -o pipefail
+
+          make \
+            platform=psl1ght \
+            COMMONLV= \
+            clean \
+            2>&1 | tee "$GITHUB_WORKSPACE/ci-logs/fbneo-clean.log"
+
+      - name: Compile FBNeo PSL1GHT static core
+        working-directory: src/burner/libretro
+        shell: bash
+        run: |
+          set -o pipefail
+
+          make \
+            platform=psl1ght \
+            COMMONLV= \
+            -j"$(getconf _NPROCESSORS_ONLN)" \
+            2>&1 | tee "$GITHUB_WORKSPACE/ci-logs/fbneo-build.log"
+
+          test -s fbneo_libretro_psl1ght.a
+
+          ls -lh fbneo_libretro_psl1ght.a \
+            | tee -a "$GITHUB_WORKSPACE/ci-logs/fbneo-build.log"
+
+      # ==========================================================
+      # Check libretro symbols
+      # ==========================================================
+
+      - name: Inspect FBNeo archive
+        working-directory: src/burner/libretro
+        shell: bash
+        run: |
+          set -o pipefail
+
+          {
+            echo "========================================"
+            echo "Archive"
+            echo "========================================"
+
+            ls -lh fbneo_libretro_psl1ght.a
+
+            echo
+            echo "========================================"
+            echo "Expected Libretro symbols"
+            echo "========================================"
+
+            if command -v ppu-nm >/dev/null 2>&1; then
+
+              ppu-nm \
+                -g \
+                --defined-only \
+                fbneo_libretro_psl1ght.a \
+                | grep -E \
+                'retro_(init|deinit|run|load_game|get_system_info|get_system_av_info)$' \
+                || true
+
+            else
+
+              echo "ppu-nm unavailable"
+
+            fi
+
+          } 2>&1 | tee "$GITHUB_WORKSPACE/ci-logs/fbneo-symbols.log"
+
+      # ==========================================================
+      # Install FBNeo archive for RetroArch
+      # ==========================================================
+
+      - name: Install FBNeo into RetroArch
+        shell: bash
+        run: |
+          set -eu
+
+          cp \
+            src/burner/libretro/fbneo_libretro_psl1ght.a \
+            retroarch/libretro_psl1ght.a
+
+          cp \
+            src/burner/libretro/fbneo_libretro_psl1ght.a \
+            dist/cores/fbneo_libretro_psl1ght.a
+
+          ls -lh retroarch/libretro_psl1ght.a
+
+      # ==========================================================
+      # Build RetroArch + FBNeo
+      #
+      # IMPORTANT:
+      #
+      # Do NOT use:
+      #
+      # HAVE_STATIC_DUMMY=1
+      #
+      # because this build must link the real FBNeo core.
+      # ==========================================================
+
+      - name: Clean RetroArch PSL1GHT frontend
+        working-directory: retroarch
+        shell: bash
+        run: |
+          set -o pipefail
+
+          make \
+            -f Makefile.psl1ght \
+            clean \
+            2>&1 | tee "$GITHUB_WORKSPACE/ci-logs/retroarch-clean.log"
+
+      - name: Link RetroArch + FBNeo SELF
+        working-directory: retroarch
+        shell: bash
+        run: |
+          set -o pipefail
+
+          make \
+            -f Makefile.psl1ght \
+            -j"$(getconf _NPROCESSORS_ONLN)" \
+            info \
+            all \
+            2>&1 | tee "$GITHUB_WORKSPACE/ci-logs/retroarch-fbneo-link.log"
+
+          test -s retroarch_psl1ght.elf
+          test -s retroarch_psl1ght.self
+
+          cp \
+            retroarch_psl1ght.elf \
+            "$GITHUB_WORKSPACE/dist/cores/fbneo_libretro_psl1ght.elf"
+
+          cp \
+            retroarch_psl1ght.self \
+            "$GITHUB_WORKSPACE/dist/cores/fbneo_libretro_psl1ght.SELF"
+
+          ls -lh \
+            "$GITHUB_WORKSPACE/dist/cores/fbneo_libretro_psl1ght.elf" \
+            "$GITHUB_WORKSPACE/dist/cores/fbneo_libretro_psl1ght.SELF" \
+            | tee -a "$GITHUB_WORKSPACE/ci-logs/retroarch-fbneo-link.log"
+
+      # ==========================================================
+      # Salamander
+      # ==========================================================
+
+      - name: Clean Salamander
+        working-directory: retroarch
+        shell: bash
+        run: |
+          set -o pipefail
+
+          make \
+            -f Makefile.psl1ght.salamander \
+            clean \
+            2>&1 | tee "$GITHUB_WORKSPACE/ci-logs/salamander-clean.log"
+
+      - name: Compile Salamander
+        working-directory: retroarch
+        shell: bash
+        run: |
+          set -o pipefail
+
+          make \
+            -f Makefile.psl1ght.salamander \
+            -j"$(getconf _NPROCESSORS_ONLN)" \
+            2>&1 | tee "$GITHUB_WORKSPACE/ci-logs/salamander-build.log"
+
+          if [ -f retroarch_psl1ght_salamander.elf ]; then
+            cp \
+              retroarch_psl1ght_salamander.elf \
+              "$GITHUB_WORKSPACE/dist/salamander/"
+          fi
+
+          if [ -f retroarch_psl1ght_salamander_nonstripped.elf ]; then
+            cp \
+              retroarch_psl1ght_salamander_nonstripped.elf \
+              "$GITHUB_WORKSPACE/dist/salamander/"
+          fi
+
+          if [ -f pkg/psl1ght/pkg/USRDIR/EBOOT.BIN ]; then
+            cp \
+              pkg/psl1ght/pkg/USRDIR/EBOOT.BIN \
+              "$GITHUB_WORKSPACE/dist/salamander/"
+          fi
+
+          find "$GITHUB_WORKSPACE/dist/salamander" \
+            -maxdepth 1 \
+            -type f \
+            -exec ls -lh {} \; \
+            | tee -a "$GITHUB_WORKSPACE/ci-logs/salamander-build.log"
+
+      # ==========================================================
+      # Summary
+      # ==========================================================
+
+      - name: Build summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "# FBNeo PS3 / PSL1GHT"
+            echo
+            echo "FBNeo commit:"
+            echo "\`$(git rev-parse HEAD)\`"
+            echo
+            echo "RetroArch commit:"
+            echo "\`$(git -C retroarch rev-parse HEAD)\`"
+            echo
+            echo "## Produced files"
+
+            if [ -d dist ]; then
+              find dist \
+                -type f \
+                -printf '%p  %s bytes\n' \
+                | sort
+            fi
+
+            echo
+            echo "如果构建失败，请保存失败 Step 的日志，或下载 logs Artifact。"
+
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ==========================================================
+      # Always upload logs
+      #
+      # 即使编译失败，这一步也运行。
+      # ==========================================================
+
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FBNeo-PS3-PSL1GHT-logs-${{ github.sha }}
+          if-no-files-found: warn
+          path: ci-logs/
+
+      # ==========================================================
+      # Upload successful binaries
+      # ==========================================================
+
+      - name: Upload PS3 PSL1GHT build
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FBNeo-PS3-PSL1GHT-${{ github.sha }}
+          if-no-files-found: error
+          path: dist/
