@@ -1,16 +1,11 @@
 name: CI FBNeo PS3 PSL1GHT
 
 on:
-  push:
-    branches: [source-main]
-
-  pull_request:
-    branches: [source-main]
-
   workflow_dispatch:
 
   repository_dispatch:
-    types: [run_build]
+    types:
+      - run_build
 
 permissions:
   contents: read
@@ -27,24 +22,58 @@ jobs:
       options: --user root
 
     steps:
+
       # ==========================================================
-      # Checkout
+      # 1. Checkout FBNeo
+      #
+      # Workflow itself lives on main.
+      # The source being compiled is explicitly source-main.
       # ==========================================================
 
-      - name: Checkout FBNeo
+      - name: Checkout FBNeo source-main
         uses: actions/checkout@v4
         with:
+          ref: source-main
           fetch-depth: 1
+
+      # ==========================================================
+      # 2. Checkout RetroArch
+      #
+      # Pin RetroArch while porting so upstream changes don't
+      # randomly affect our debugging.
+      # ==========================================================
 
       - name: Checkout RetroArch
         uses: actions/checkout@v4
         with:
           repository: libretro/RetroArch
+          ref: 639eb216a61c8a600a000a5e7eb2e2c254f4f4f3
           path: retroarch
           fetch-depth: 1
 
       # ==========================================================
-      # Prepare diagnostics
+      # 3. Fix Git safe.directory
+      #
+      # GitHub Actions checkout configures safe.directory using
+      # a temporary HOME. Inside the job container HOME changes,
+      # so Git may otherwise report:
+      #
+      # fatal: detected dubious ownership
+      # ==========================================================
+
+      - name: Mark repositories as safe
+        shell: bash
+        run: |
+          set -e
+
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/retroarch"
+
+          echo "Configured Git safe directories:"
+          git config --global --get-all safe.directory
+
+      # ==========================================================
+      # 4. Prepare directories and diagnostics
       # ==========================================================
 
       - name: Prepare diagnostics
@@ -66,6 +95,15 @@ jobs:
             echo "PORTLIBS=${PORTLIBS:-<unset>}"
 
             echo
+
+            echo "========================================"
+            echo "PATH"
+            echo "========================================"
+
+            echo "$PATH"
+
+            echo
+
             echo "========================================"
             echo "Toolchain"
             echo "========================================"
@@ -74,6 +112,7 @@ jobs:
             command -v ppu-g++ || true
             command -v ppu-ar || true
             command -v ppu-nm || true
+            command -v ppu-strip || true
             command -v make || true
 
             echo
@@ -81,17 +120,49 @@ jobs:
             ppu-gcc --version || true
 
             echo
+
             echo "========================================"
             echo "Source revisions"
             echo "========================================"
 
-            echo "FBNeo:"
+            echo "FBNeo branch:"
+            git branch --show-current || true
+
+            echo "FBNeo commit:"
             git rev-parse HEAD
 
-            echo "RetroArch:"
+            echo
+
+            echo "RetroArch branch:"
+            git -C retroarch branch --show-current || true
+
+            echo "RetroArch commit:"
             git -C retroarch rev-parse HEAD
 
-          } | tee "$GITHUB_WORKSPACE/ci-logs/environment.log"
+            echo
+
+            echo "========================================"
+            echo "PSL1GHT directories"
+            echo "========================================"
+
+            ls -ld /opt/ps3dev || true
+            ls -ld /opt/ps3dev/ppu || true
+
+            echo
+
+            find /opt/ps3dev \
+              -maxdepth 3 \
+              -type d \
+              \( -name include -o -name lib \) \
+              2>/dev/null \
+              | sort \
+              | head -100 \
+              || true
+
+          } 2>&1 | tee "$GITHUB_WORKSPACE/ci-logs/environment.log"
+
+          echo
+          echo "Checking required environment..."
 
           test -n "${PS3DEV:-}"
           test -n "${PSL1GHT:-}"
@@ -101,7 +172,7 @@ jobs:
           command -v ppu-ar >/dev/null
 
       # ==========================================================
-      # Build FBNeo static core
+      # 5. Clean FBNeo
       # ==========================================================
 
       - name: Clean FBNeo PSL1GHT core
@@ -116,6 +187,22 @@ jobs:
             clean \
             2>&1 | tee "$GITHUB_WORKSPACE/ci-logs/fbneo-clean.log"
 
+      # ==========================================================
+      # 6. Build FBNeo static Libretro core
+      #
+      # PSL1GHT tools are:
+      #
+      # ppu-gcc
+      # ppu-g++
+      # ppu-ar
+      #
+      # therefore COMMONLV must be empty.
+      #
+      # Result expected:
+      #
+      # fbneo_libretro_psl1ght.a
+      # ==========================================================
+
       - name: Compile FBNeo PSL1GHT static core
         working-directory: src/burner/libretro
         shell: bash
@@ -128,13 +215,18 @@ jobs:
             -j"$(getconf _NPROCESSORS_ONLN)" \
             2>&1 | tee "$GITHUB_WORKSPACE/ci-logs/fbneo-build.log"
 
+          echo
+          echo "========================================"
+          echo "FBNeo build output"
+          echo "========================================"
+
           test -s fbneo_libretro_psl1ght.a
 
           ls -lh fbneo_libretro_psl1ght.a \
             | tee -a "$GITHUB_WORKSPACE/ci-logs/fbneo-build.log"
 
       # ==========================================================
-      # Check libretro symbols
+      # 7. Inspect generated archive
       # ==========================================================
 
       - name: Inspect FBNeo archive
@@ -151,6 +243,7 @@ jobs:
             ls -lh fbneo_libretro_psl1ght.a
 
             echo
+
             echo "========================================"
             echo "Expected Libretro symbols"
             echo "========================================"
@@ -174,7 +267,15 @@ jobs:
           } 2>&1 | tee "$GITHUB_WORKSPACE/ci-logs/fbneo-symbols.log"
 
       # ==========================================================
-      # Install FBNeo archive for RetroArch
+      # 8. Copy FBNeo archive into RetroArch
+      #
+      # RetroArch Makefile.psl1ght expects:
+      #
+      # -lretro_psl1ght
+      #
+      # therefore:
+      #
+      # libretro_psl1ght.a
       # ==========================================================
 
       - name: Install FBNeo into RetroArch
@@ -190,18 +291,14 @@ jobs:
             src/burner/libretro/fbneo_libretro_psl1ght.a \
             dist/cores/fbneo_libretro_psl1ght.a
 
-          ls -lh retroarch/libretro_psl1ght.a
+          echo "Installed FBNeo archive:"
+
+          ls -lh \
+            retroarch/libretro_psl1ght.a \
+            dist/cores/fbneo_libretro_psl1ght.a
 
       # ==========================================================
-      # Build RetroArch + FBNeo
-      #
-      # IMPORTANT:
-      #
-      # Do NOT use:
-      #
-      # HAVE_STATIC_DUMMY=1
-      #
-      # because this build must link the real FBNeo core.
+      # 9. Clean RetroArch
       # ==========================================================
 
       - name: Clean RetroArch PSL1GHT frontend
@@ -215,7 +312,19 @@ jobs:
             clean \
             2>&1 | tee "$GITHUB_WORKSPACE/ci-logs/retroarch-clean.log"
 
-      - name: Link RetroArch + FBNeo SELF
+      # ==========================================================
+      # 10. Link RetroArch + FBNeo
+      #
+      # IMPORTANT:
+      #
+      # DO NOT use:
+      #
+      # HAVE_STATIC_DUMMY=1
+      #
+      # We need the real FBNeo archive linked into this SELF.
+      # ==========================================================
+
+      - name: Link RetroArch plus FBNeo SELF
         working-directory: retroarch
         shell: bash
         run: |
@@ -227,6 +336,11 @@ jobs:
             info \
             all \
             2>&1 | tee "$GITHUB_WORKSPACE/ci-logs/retroarch-fbneo-link.log"
+
+          echo
+          echo "========================================"
+          echo "RetroArch + FBNeo output"
+          echo "========================================"
 
           test -s retroarch_psl1ght.elf
           test -s retroarch_psl1ght.self
@@ -245,7 +359,7 @@ jobs:
             | tee -a "$GITHUB_WORKSPACE/ci-logs/retroarch-fbneo-link.log"
 
       # ==========================================================
-      # Salamander
+      # 11. Clean Salamander
       # ==========================================================
 
       - name: Clean Salamander
@@ -259,6 +373,10 @@ jobs:
             clean \
             2>&1 | tee "$GITHUB_WORKSPACE/ci-logs/salamander-clean.log"
 
+      # ==========================================================
+      # 12. Build Salamander launcher
+      # ==========================================================
+
       - name: Compile Salamander
         working-directory: retroarch
         shell: bash
@@ -269,6 +387,11 @@ jobs:
             -f Makefile.psl1ght.salamander \
             -j"$(getconf _NPROCESSORS_ONLN)" \
             2>&1 | tee "$GITHUB_WORKSPACE/ci-logs/salamander-build.log"
+
+          echo
+          echo "========================================"
+          echo "Collect Salamander files"
+          echo "========================================"
 
           if [ -f retroarch_psl1ght_salamander.elf ]; then
             cp \
@@ -288,14 +411,40 @@ jobs:
               "$GITHUB_WORKSPACE/dist/salamander/"
           fi
 
-          find "$GITHUB_WORKSPACE/dist/salamander" \
+          find \
+            "$GITHUB_WORKSPACE/dist/salamander" \
             -maxdepth 1 \
             -type f \
             -exec ls -lh {} \; \
             | tee -a "$GITHUB_WORKSPACE/ci-logs/salamander-build.log"
 
       # ==========================================================
-      # Summary
+      # 13. Generate final diagnostic information
+      # ==========================================================
+
+      - name: Final diagnostics
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "========================================"
+            echo "Final files"
+            echo "========================================"
+
+            if [ -d dist ]; then
+
+              find \
+                dist \
+                -type f \
+                -printf '%p  %s bytes\n' \
+                | sort
+
+            fi
+
+          } 2>&1 | tee "$GITHUB_WORKSPACE/ci-logs/final-files.log"
+
+      # ==========================================================
+      # 14. GitHub Actions summary
       # ==========================================================
 
       - name: Build summary
@@ -303,50 +452,64 @@ jobs:
         shell: bash
         run: |
           {
-            echo "# FBNeo PS3 / PSL1GHT"
+            echo "# FBNeo PS3 / PSL1GHT build"
             echo
+
+            echo "## Source"
+            echo
+
+            echo "FBNeo branch:"
+            echo "\`source-main\`"
+            echo
+
             echo "FBNeo commit:"
-            echo "\`$(git rev-parse HEAD)\`"
+            echo "\`${GITHUB_SHA}\`"
             echo
+
             echo "RetroArch commit:"
-            echo "\`$(git -C retroarch rev-parse HEAD)\`"
+            echo "\`639eb216a61c8a600a000a5e7eb2e2c254f4f4f3\`"
             echo
+
             echo "## Produced files"
+            echo
 
             if [ -d dist ]; then
-              find dist \
+
+              find \
+                dist \
                 -type f \
                 -printf '%p  %s bytes\n' \
                 | sort
+
             fi
 
             echo
-            echo "如果构建失败，请保存失败 Step 的日志，或下载 logs Artifact。"
+            echo "If the job failed, send the GitHub Actions job URL to ChatGPT."
 
           } >> "$GITHUB_STEP_SUMMARY"
 
       # ==========================================================
-      # Always upload logs
+      # 15. Always upload diagnostic logs
       #
-      # 即使编译失败，这一步也运行。
+      # This still runs after a compiler/linker failure.
       # ==========================================================
 
       - name: Upload diagnostic logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: FBNeo-PS3-PSL1GHT-logs-${{ github.sha }}
+          name: FBNeo-PS3-PSL1GHT-logs-${{ github.run_number }}
           if-no-files-found: warn
           path: ci-logs/
 
       # ==========================================================
-      # Upload successful binaries
+      # 16. Upload successful build
       # ==========================================================
 
       - name: Upload PS3 PSL1GHT build
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: FBNeo-PS3-PSL1GHT-${{ github.sha }}
+          name: FBNeo-PS3-PSL1GHT-build-${{ github.run_number }}
           if-no-files-found: error
           path: dist/
