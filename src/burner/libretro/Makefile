@@ -240,6 +240,7 @@ else ifneq (,$(filter $(platform), ps3 psl1ght))
 	PS3_MEMORY_POOL_SIZE_MB ?= 64
 	PS3_NATIVE_MEMORY ?= 0
 	PS3_PGM_MASK_FILE_CACHE ?= 0
+    PS3_PGM_COLOR_FILE_CACHE ?= 0
 	# Keep FBNeo's many independent objects from exhausting the PPU 64 KiB TOC
 	# when linked into the PS3 RetroArch frontend.
 	PLATFORM_DEFINES += -D__PS3__ -mminimal-toc \
@@ -247,7 +248,8 @@ else ifneq (,$(filter $(platform), ps3 psl1ght))
 		-DPS3_MEMORY_DIAGNOSTIC=$(PS3_MEMORY_DIAGNOSTIC) \
 		-DPS3_MEMORY_POOL_SIZE_MB=$(PS3_MEMORY_POOL_SIZE_MB) \
 		-DPS3_NATIVE_MEMORY=$(PS3_NATIVE_MEMORY) \
-		-DPS3_PGM_MASK_FILE_CACHE=$(PS3_PGM_MASK_FILE_CACHE)
+		-DPS3_PGM_MASK_FILE_CACHE=$(PS3_PGM_MASK_FILE_CACHE) \
+            -DPS3_PGM_COLOR_FILE_CACHE=$(PS3_PGM_COLOR_FILE_CACHE)
 	# Cell PPU release tuning; appended after generic rules below.
 	PS3_PERF_FLAGS := -O3 -maltivec -mabi=altivec -fstrict-aliasing \
 		-fomit-frame-pointer -ffast-math

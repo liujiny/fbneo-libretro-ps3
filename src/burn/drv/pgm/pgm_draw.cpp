@@ -38,7 +38,7 @@ static inline UINT8 pgm_sprite_color(UINT32 pixel)
 	if (pixel >= actual) return 0;
 	UINT32 pair = pixel / 3;
 	UINT32 shift = (pixel % 3) * 5;
-	UINT16 packed = PGMSPRColROM[pair * 2] | (PGMSPRColROM[pair * 2 + 1] << 8);
+	UINT16 packed = pgm_ps3_color_read_pair(pair);
 	return (packed >> shift) & 0x1f;
 #else
 	return PGMSPRColROM[pixel];
@@ -53,13 +53,13 @@ static inline void pgm_sprite_colors8(UINT32 pixel, UINT8 *out)
 	if (nPGMSPRColPacked && pixel + 7 < actual && pixel + 7 <= (UINT32)nPGMSPRColMaskLen) {
 		UINT32 pair = pixel / 3;
 		INT32 phase = pixel - pair * 3;
-		UINT16 packed = PGMSPRColROM[pair * 2] | (PGMSPRColROM[pair * 2 + 1] << 8);
+		UINT16 packed = pgm_ps3_color_read_pair(pair);
 		for (INT32 i = 0; i < 8; i++) {
 			out[i] = (packed >> (phase * 5)) & 0x1f;
 			if (++phase == 3 && i != 7) {
 				phase = 0;
 				pair++;
-				packed = PGMSPRColROM[pair * 2] | (PGMSPRColROM[pair * 2 + 1] << 8);
+				packed = pgm_ps3_color_read_pair(pair);
 			}
 		}
 		return;

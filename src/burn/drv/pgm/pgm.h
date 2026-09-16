@@ -58,6 +58,48 @@ static inline UINT8 pgm_ps3_mask_read(UINT32 offset)
 		(offset & (PGM_PS3_MASK_PAGE_SIZE - 1))
 	];
 }
+
+#define PGM_PS3_COLOR_PAGE_SHIFT 16
+#define PGM_PS3_COLOR_PAGE_SIZE  (1u << PGM_PS3_COLOR_PAGE_SHIFT)
+#define PGM_PS3_COLOR_CACHE_PAGES 128
+#define PGM_PS3_COLOR_CACHE_MASK  (PGM_PS3_COLOR_CACHE_PAGES - 1)
+
+extern UINT8 *PGMSPRColPageCache;
+extern INT32 PGMSPRColPageTag[PGM_PS3_COLOR_CACHE_PAGES];
+extern INT32 nPGMSPRColFileCacheActive;
+
+UINT8 *pgm_ps3_color_cache_miss(UINT32 page);
+
+/*
+ * Packed PGM color ROM stores 3 x 5-bit pixels in each 16-bit word.
+ * pair<<1 is always even, so the two bytes cannot straddle a 64 KiB
+ * page boundary.
+ */
+static inline UINT16 pgm_ps3_color_read_pair(UINT32 pair)
+{
+    UINT32 offset = pair << 1;
+
+    if (!nPGMSPRColFileCacheActive) {
+        return (UINT16)(
+            PGMSPRColROM[offset] |
+            (PGMSPRColROM[offset + 1] << 8));
+    }
+
+    UINT32 page = offset >> PGM_PS3_COLOR_PAGE_SHIFT;
+    UINT32 slot = page & PGM_PS3_COLOR_CACHE_MASK;
+
+    if (PGMSPRColPageTag[slot] != (INT32)page) {
+        pgm_ps3_color_cache_miss(page);
+    }
+
+    const UINT8 *src =
+        PGMSPRColPageCache +
+        (slot << PGM_PS3_COLOR_PAGE_SHIFT) +
+        (offset & (PGM_PS3_COLOR_PAGE_SIZE - 1));
+
+    return (UINT16)(src[0] | (src[1] << 8));
+}
+
 #endif
 extern UINT8 *PGMARMROM;
 extern UINT8 *PGMUSER0;

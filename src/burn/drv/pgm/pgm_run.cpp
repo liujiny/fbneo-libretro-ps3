@@ -297,6 +297,254 @@ static void pgm_ps3_mask_cache_exit()
     remove(PS3_PGM_MASK_CACHE_PATH);
 }
 
+#ifndef PS3_PGM_COLOR_FILE_CACHE
+#define PS3_PGM_COLOR_FILE_CACHE 0
+#endif
+
+#define PS3_PGM_COLOR_CACHE_PATH "/dev_hdd0/tmp/fbneo-pgm-color.cache"
+
+UINT8 *PGMSPRColPageCache = NULL;
+INT32 PGMSPRColPageTag[PGM_PS3_COLOR_CACHE_PAGES];
+INT32 nPGMSPRColFileCacheActive = 0;
+
+static FILE *g_ps3_color_cache_file = NULL;
+static UINT32 g_ps3_color_cache_misses = 0;
+static UINT32 g_ps3_color_cache_errors = 0;
+
+UINT8 *pgm_ps3_color_cache_miss(UINT32 page)
+{
+    UINT32 slot = page & PGM_PS3_COLOR_CACHE_MASK;
+
+    UINT8 *dst =
+        PGMSPRColPageCache +
+        (slot << PGM_PS3_COLOR_PAGE_SHIFT);
+
+    long file_offset =
+        (long)(page << PGM_PS3_COLOR_PAGE_SHIFT);
+
+    g_ps3_color_cache_misses++;
+
+    if (g_ps3_color_cache_file == NULL ||
+        fseek(g_ps3_color_cache_file, file_offset, SEEK_SET) != 0) {
+
+        memset(dst, 0, PGM_PS3_COLOR_PAGE_SIZE);
+        g_ps3_color_cache_errors++;
+        PGMSPRColPageTag[slot] = (INT32)page;
+        return dst;
+    }
+
+    size_t got =
+        fread(dst, 1,
+              PGM_PS3_COLOR_PAGE_SIZE,
+              g_ps3_color_cache_file);
+
+    if (got < PGM_PS3_COLOR_PAGE_SIZE) {
+        memset(
+            dst + got,
+            0,
+            PGM_PS3_COLOR_PAGE_SIZE - got);
+
+        if ((UINT32)file_offset + (UINT32)got <
+            (UINT32)nPGMSPRColROMLen) {
+            g_ps3_color_cache_errors++;
+        }
+    }
+
+    PGMSPRColPageTag[slot] = (INT32)page;
+    return dst;
+}
+
+static void pgm_ps3_color_cache_close_file()
+{
+    if (g_ps3_color_cache_file != NULL) {
+        fclose(g_ps3_color_cache_file);
+        g_ps3_color_cache_file = NULL;
+    }
+}
+
+static INT32 pgm_ps3_color_cache_restore_full()
+{
+    PS3_PGM_MEM_LABEL("PGMSPRColROM");
+
+    PGMSPRColROM = (UINT8*)BurnMalloc(
+        nPGMSPRColROMLen + 128);
+
+    if (PGMSPRColROM == NULL) {
+        bprintf(
+            PRINT_ERROR,
+            _T("[FBNeo] PS3 color cache fallback: unable to restore full color ROM\n"));
+        return 1;
+    }
+
+    if (fseek(g_ps3_color_cache_file, 0, SEEK_SET) != 0 ||
+        fread(PGMSPRColROM, 1,
+              nPGMSPRColROMLen,
+              g_ps3_color_cache_file) !=
+              (size_t)nPGMSPRColROMLen) {
+
+        bprintf(
+            PRINT_ERROR,
+            _T("[FBNeo] PS3 color cache fallback: reload failed\n"));
+        return 1;
+    }
+
+    memset(
+        PGMSPRColROM + nPGMSPRColROMLen,
+        0,
+        128);
+
+    pgm_ps3_color_cache_close_file();
+    remove(PS3_PGM_COLOR_CACHE_PATH);
+
+    bprintf(
+        PRINT_IMPORTANT,
+        _T("[FBNeo] PS3 color cache fallback: restored full color ROM\n"));
+
+    return 0;
+}
+
+static INT32 pgm_ps3_color_cache_build()
+{
+#if !PS3_PGM_COLOR_FILE_CACHE
+    return 0;
+#else
+    /*
+     * First validation target: KOV2.
+     * DDP2 and any unpacked-color path remain untouched.
+     */
+    if (strcmp(BurnDrvGetTextA(DRV_NAME), "kov2") != 0) {
+        return 0;
+    }
+
+    if (!nPGMSPRColPacked ||
+        PGMSPRColROM == NULL) {
+        return 0;
+    }
+
+    const UINT32 cache_bytes =
+        PGM_PS3_COLOR_CACHE_PAGES *
+        PGM_PS3_COLOR_PAGE_SIZE;
+
+    if ((UINT32)nPGMSPRColROMLen <= cache_bytes) {
+        return 0;
+    }
+
+    FILE *out =
+        fopen(PS3_PGM_COLOR_CACHE_PATH, "wb");
+
+    if (out == NULL) {
+        bprintf(
+            PRINT_IMPORTANT,
+            _T("[FBNeo] PS3 color cache disabled: cannot create backing file\n"));
+        return 0;
+    }
+
+    size_t written =
+        fwrite(
+            PGMSPRColROM,
+            1,
+            nPGMSPRColROMLen,
+            out);
+
+    fflush(out);
+    fclose(out);
+
+    if (written != (size_t)nPGMSPRColROMLen) {
+        remove(PS3_PGM_COLOR_CACHE_PATH);
+
+        bprintf(
+            PRINT_IMPORTANT,
+            _T("[FBNeo] PS3 color cache disabled: short write %lu/%d\n"),
+            (unsigned long)written,
+            nPGMSPRColROMLen);
+
+        return 0;
+    }
+
+    g_ps3_color_cache_file =
+        fopen(PS3_PGM_COLOR_CACHE_PATH, "rb");
+
+    if (g_ps3_color_cache_file == NULL) {
+        remove(PS3_PGM_COLOR_CACHE_PATH);
+        return 0;
+    }
+
+    /*
+     * The file contains the final packed, decrypted color image.
+     * From this point forward PS3 drawing goes through the accessor.
+     */
+    BurnFree(PGMSPRColROM);
+    PGMSPRColROM = NULL;
+
+    PS3_PGM_MEM_LABEL("PGMColorPageCache");
+
+    PGMSPRColPageCache =
+        (UINT8*)BurnMalloc(cache_bytes);
+
+    if (PGMSPRColPageCache == NULL) {
+        bprintf(
+            PRINT_IMPORTANT,
+            _T("[FBNeo] PS3 color cache allocation failed; restoring full color ROM\n"));
+
+        return pgm_ps3_color_cache_restore_full();
+    }
+
+    memset(
+        PGMSPRColPageCache,
+        0,
+        cache_bytes);
+
+    for (INT32 i = 0;
+         i < PGM_PS3_COLOR_CACHE_PAGES;
+         i++) {
+        PGMSPRColPageTag[i] = -1;
+    }
+
+    g_ps3_color_cache_misses = 0;
+    g_ps3_color_cache_errors = 0;
+    nPGMSPRColFileCacheActive = 1;
+
+    bprintf(
+        PRINT_IMPORTANT,
+        _T("[FBNeo] PS3 PGM color file cache enabled: backing=%d cache=%u page=%u slots=%u saved=%u\n"),
+        nPGMSPRColROMLen,
+        (unsigned)cache_bytes,
+        (unsigned)PGM_PS3_COLOR_PAGE_SIZE,
+        (unsigned)PGM_PS3_COLOR_CACHE_PAGES,
+        (unsigned)(nPGMSPRColROMLen -
+                   cache_bytes));
+
+    return 0;
+#endif
+}
+
+static void pgm_ps3_color_cache_exit()
+{
+    if (nPGMSPRColFileCacheActive) {
+        bprintf(
+            PRINT_IMPORTANT,
+            _T("[FBNeo] PS3 PGM color cache stats: misses=%u read_errors=%u\n"),
+            g_ps3_color_cache_misses,
+            g_ps3_color_cache_errors);
+    }
+
+    nPGMSPRColFileCacheActive = 0;
+
+    if (PGMSPRColPageCache != NULL) {
+        BurnFree(PGMSPRColPageCache);
+        PGMSPRColPageCache = NULL;
+    }
+
+    for (INT32 i = 0;
+         i < PGM_PS3_COLOR_CACHE_PAGES;
+         i++) {
+        PGMSPRColPageTag[i] = -1;
+    }
+
+    pgm_ps3_color_cache_close_file();
+    remove(PS3_PGM_COLOR_CACHE_PATH);
+}
+
 #endif
 
 UINT8 nPgmPalRecalc = 0;
@@ -1321,6 +1569,11 @@ INT32 pgmInit()
 	        return 1;
 	}
 	#endif
+	#ifdef __PS3__
+	if (pgm_ps3_color_cache_build()) {
+	        return 1;
+	}
+	#endif
 
 	bprintf(PRINT_IMPORTANT, _T("[FBNeo] PGM stage: protection ready, reset\n"));
 	PgmDoReset();
@@ -1335,6 +1588,7 @@ INT32 pgmExit()
 
 #ifdef __PS3__
         pgm_ps3_mask_cache_exit();
+        pgm_ps3_color_cache_exit();
 #endif
 
 	SekExit();
