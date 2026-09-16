@@ -211,6 +211,15 @@ static void pgm_drawsprites_fonts(INT32 priority)
 }
 #endif
 
+static inline UINT8 pgm_mask_byte(UINT32 offset)
+{
+#ifdef __PS3__
+	return pgm_ps3_mask_read(offset);
+#else
+	return PGMSPRMaskROM[offset & nPGMSPRMaskMaskLen];
+#endif
+}
+
 inline static UINT32 CalcCol(UINT16 nColour)
 {
 	INT32 r, g, b;
@@ -236,7 +245,7 @@ static void pgm_prepare_sprite(INT32 wide, INT32 high, INT32 palt, INT32 boffset
 	wide *= 16;
 	palt *= 32;
 
-	UINT32 aoffset = (bdata[(boffset+3) & bdatasize] << 24) | (bdata[(boffset+2) & bdatasize] << 16) | (bdata[(boffset+1) & bdatasize] << 8) | (bdata[(boffset) & bdatasize]);
+	UINT32 aoffset = (pgm_mask_byte(boffset + 3) << 24) | (pgm_mask_byte(boffset + 2) << 16) | (pgm_mask_byte(boffset + 1) << 8) | (pgm_mask_byte(boffset));
 	aoffset = (aoffset >> 2) * 3;
 
 	boffset += 4;
@@ -247,9 +256,9 @@ static void pgm_prepare_sprite(INT32 wide, INT32 high, INT32 palt, INT32 boffset
 		{
 			#ifdef __PS3__
 			UINT8 colors[8]; pgm_sprite_colors8(aoffset, colors);
-			aoffset += zoom_draw_table[bdata[boffset & bdatasize]](dest + xcnt, colors, palt);
+			aoffset += zoom_draw_table[pgm_mask_byte(boffset)](dest + xcnt, colors, palt);
 #else
-			aoffset += zoom_draw_table[bdata[boffset & bdatasize]](dest + xcnt, PGMSPRColROM + (aoffset & nPGMSPRColMaskLen), palt);
+			aoffset += zoom_draw_table[pgm_mask_byte(boffset)](dest + xcnt, PGMSPRColROM + (aoffset & nPGMSPRColMaskLen), palt);
 #endif
 
 			boffset++;
@@ -335,7 +344,7 @@ static void pgm_draw_sprite_nozoom(INT32 wide, INT32 high, INT32 palt, INT32 bof
 
 	UINT16 msk;
 
-	UINT32 aoffset = (bdata[(boffset+3) & bdatasize] << 24) | (bdata[(boffset+2) & bdatasize] << 16) | (bdata[(boffset+1) & bdatasize] << 8) | (bdata[boffset & bdatasize]);
+	UINT32 aoffset = (pgm_mask_byte(boffset + 3) << 24) | (pgm_mask_byte(boffset + 2) << 16) | (pgm_mask_byte(boffset + 1) << 8) | (pgm_mask_byte(boffset));
 	aoffset = (aoffset >> 2) * 3;
 	aoffset &= adatasize;
 
@@ -375,16 +384,16 @@ static void pgm_draw_sprite_nozoom(INT32 wide, INT32 high, INT32 palt, INT32 bof
 
 				#ifdef __PS3__
 				UINT8 colors[8]; pgm_sprite_colors8(aoffset, colors);
-				aoffset += drawsprite[bdata[boffset & bdatasize]](dest + xoff, pdest + xoff, colors, palt, prio);
+				aoffset += drawsprite[pgm_mask_byte(boffset)](dest + xoff, pdest + xoff, colors, palt, prio);
 #else
-				aoffset += drawsprite[bdata[boffset & bdatasize]](dest + xoff, pdest + xoff, PGMSPRColROM + (aoffset & nPGMSPRColMaskLen), palt, prio);
+				aoffset += drawsprite[pgm_mask_byte(boffset)](dest + xoff, pdest + xoff, PGMSPRColROM + (aoffset & nPGMSPRColMaskLen), palt, prio);
 #endif
 				boffset++;
 			}
 		} else {
 			for (INT32 xcnt = 0; xcnt < wide; xcnt+=8)
 			{
-				msk = bdata[boffset & bdatasize] ^ 0xff;
+				msk = pgm_mask_byte(boffset) ^ 0xff;
 				boffset++;
 				aoffset &= adatasize;
 
@@ -462,7 +471,7 @@ static void pgm_dump_sprite(INT32 wide, INT32 high, INT32 palt, INT32 boffset, I
 
 	UINT32 boffset_initial = boffset/2;
 
-	UINT32 aoffset = (bdata[(boffset+3) & bdatasize] << 24) | (bdata[(boffset+2) & bdatasize] << 16) | (bdata[(boffset+1) & bdatasize] << 8) | (bdata[boffset & bdatasize]);
+	UINT32 aoffset = (pgm_mask_byte(boffset + 3) << 24) | (pgm_mask_byte(boffset + 2) << 16) | (pgm_mask_byte(boffset + 1) << 8) | (pgm_mask_byte(boffset));
 	aoffset = (aoffset >> 2) * 3;
 	aoffset &= adatasize;
 
@@ -500,7 +509,7 @@ static void pgm_dump_sprite(INT32 wide, INT32 high, INT32 palt, INT32 boffset, I
 		{
 			for (INT32 xcnt = 0; xcnt < wide; xcnt+=8)
 			{
-				msk = bdata[boffset & bdatasize] ^ 0xff;
+				msk = pgm_mask_byte(boffset) ^ 0xff;
 				boffset++;
 				aoffset &= adatasize;
 

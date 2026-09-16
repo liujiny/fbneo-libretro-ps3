@@ -4,6 +4,16 @@
 #include "ics2115.h"
 #include "timer.h"
 
+#ifdef __PS3__
+#include <stdio.h>
+#endif
+#ifdef __PS3__
+#include "../../ps3_memory_pool.h"
+#define PS3_PGM_MEM_LABEL(x) ps3_mem_diag_set_next_label(x)
+#else
+#define PS3_PGM_MEM_LABEL(x) ((void)0)
+#endif
+
 UINT8 PgmJoy1[8] = {0,0,0,0,0,0,0,0};
 UINT8 PgmJoy2[8] = {0,0,0,0,0,0,0,0};
 UINT8 PgmJoy3[8] = {0,0,0,0,0,0,0,0};
@@ -65,6 +75,228 @@ static INT32 pgm_ps3_kov2_compact_sound()
 	return (!bDoIpsPatch && strcmp(BurnDrvGetTextA(DRV_NAME), "kov2") == 0);
 }
 static INT32 nPGMSNDROMAllocLen = 0;
+
+#ifndef PS3_PGM_MASK_FILE_CACHE
+#define PS3_PGM_MASK_FILE_CACHE 0
+#endif
+
+#define PS3_PGM_MASK_CACHE_PATH "/dev_hdd0/tmp/fbneo-pgm-mask.cache"
+
+UINT8 *PGMSPRMaskPageCache = NULL;
+INT32 PGMSPRMaskPageTag[PGM_PS3_MASK_CACHE_PAGES];
+INT32 nPGMSPRMaskFileCacheActive = 0;
+
+static FILE *g_ps3_mask_cache_file = NULL;
+static UINT32 g_ps3_mask_cache_misses = 0;
+static UINT32 g_ps3_mask_cache_errors = 0;
+
+UINT8 *pgm_ps3_mask_cache_miss(UINT32 page)
+{
+    UINT32 slot = page & PGM_PS3_MASK_CACHE_MASK;
+    UINT8 *dst = PGMSPRMaskPageCache +
+        (slot << PGM_PS3_MASK_PAGE_SHIFT);
+    long file_offset = (long)(page << PGM_PS3_MASK_PAGE_SHIFT);
+
+    g_ps3_mask_cache_misses++;
+
+    if (g_ps3_mask_cache_file == NULL ||
+        fseek(g_ps3_mask_cache_file, file_offset, SEEK_SET) != 0) {
+        memset(dst, 0, PGM_PS3_MASK_PAGE_SIZE);
+        g_ps3_mask_cache_errors++;
+        PGMSPRMaskPageTag[slot] = (INT32)page;
+        return dst;
+    }
+
+    size_t got = fread(
+        dst, 1, PGM_PS3_MASK_PAGE_SIZE, g_ps3_mask_cache_file);
+
+    if (got < PGM_PS3_MASK_PAGE_SIZE) {
+        memset(dst + got, 0, PGM_PS3_MASK_PAGE_SIZE - got);
+
+        if ((UINT32)file_offset + (UINT32)got <
+            (UINT32)nPGMSPRMaskROMLen) {
+            g_ps3_mask_cache_errors++;
+        }
+    }
+
+    PGMSPRMaskPageTag[slot] = (INT32)page;
+    return dst;
+}
+
+static void pgm_ps3_mask_cache_close_file()
+{
+    if (g_ps3_mask_cache_file != NULL) {
+        fclose(g_ps3_mask_cache_file);
+        g_ps3_mask_cache_file = NULL;
+    }
+}
+
+static INT32 pgm_ps3_mask_cache_restore_full()
+{
+    PS3_PGM_MEM_LABEL("PGMSPRMaskROM");
+    PGMSPRMaskROM = (UINT8*)BurnMalloc(nPGMSPRMaskROMLen);
+
+    if (PGMSPRMaskROM == NULL) {
+        bprintf(PRINT_ERROR,
+            _T("[FBNeo] PS3 mask cache fallback: unable to restore full mask ROM\n"));
+        return 1;
+    }
+
+    if (fseek(g_ps3_mask_cache_file, 0, SEEK_SET) != 0 ||
+        fread(PGMSPRMaskROM, 1, nPGMSPRMaskROMLen,
+              g_ps3_mask_cache_file) !=
+              (size_t)nPGMSPRMaskROMLen) {
+        bprintf(PRINT_ERROR,
+            _T("[FBNeo] PS3 mask cache fallback: reload failed\n"));
+        return 1;
+    }
+
+    pgm_ps3_mask_cache_close_file();
+    remove(PS3_PGM_MASK_CACHE_PATH);
+
+    bprintf(PRINT_IMPORTANT,
+        _T("[FBNeo] PS3 mask cache fallback: restored full mask ROM\n"));
+
+    return 0;
+}
+
+static INT32 pgm_ps3_mask_cache_build()
+{
+#if !PS3_PGM_MASK_FILE_CACHE
+    return 0;
+#else
+    /*
+     * First validation target is KOV2 only.
+     * After validation this game-name gate can be removed.
+     */
+if (PGMSPRMaskROM == NULL ||
+        nPGMSPRMaskROMLen <=
+        (INT32)(PGM_PS3_MASK_CACHE_PAGES *
+                PGM_PS3_MASK_PAGE_SIZE)) {
+        return 0;
+    }
+
+    /*
+     * First implementation requires a power-of-two mask image,
+     * matching the existing mask-address wrap logic.
+     */
+    if ((nPGMSPRMaskROMLen &
+        (nPGMSPRMaskROMLen - 1)) != 0) {
+        bprintf(PRINT_IMPORTANT,
+            _T("[FBNeo] PS3 mask cache skipped: non-power-of-two mask size=%d\n"),
+            nPGMSPRMaskROMLen);
+        return 0;
+    }
+
+    FILE *out = fopen(PS3_PGM_MASK_CACHE_PATH, "wb");
+    if (out == NULL) {
+        bprintf(PRINT_IMPORTANT,
+            _T("[FBNeo] PS3 mask cache disabled: cannot create backing file\n"));
+        return 0;
+    }
+
+    size_t written =
+        fwrite(PGMSPRMaskROM, 1, nPGMSPRMaskROMLen, out);
+
+    fflush(out);
+    fclose(out);
+
+    if (written != (size_t)nPGMSPRMaskROMLen) {
+        remove(PS3_PGM_MASK_CACHE_PATH);
+
+        bprintf(PRINT_IMPORTANT,
+            _T("[FBNeo] PS3 mask cache disabled: short write %lu/%d\n"),
+            (unsigned long)written,
+            nPGMSPRMaskROMLen);
+
+        return 0;
+    }
+
+    g_ps3_mask_cache_file =
+        fopen(PS3_PGM_MASK_CACHE_PATH, "rb");
+
+    if (g_ps3_mask_cache_file == NULL) {
+        remove(PS3_PGM_MASK_CACHE_PATH);
+        return 0;
+    }
+
+    /*
+     * Backing file now contains the final post-load,
+     * post-decrypt, post-patch mask image.
+     */
+    BurnFree(PGMSPRMaskROM);
+    PGMSPRMaskROM = NULL;
+
+    PS3_PGM_MEM_LABEL("PGMMaskPageCache");
+
+    PGMSPRMaskPageCache = (UINT8*)BurnMalloc(
+        PGM_PS3_MASK_CACHE_PAGES *
+        PGM_PS3_MASK_PAGE_SIZE);
+
+    if (PGMSPRMaskPageCache == NULL) {
+        bprintf(PRINT_IMPORTANT,
+            _T("[FBNeo] PS3 mask cache allocation failed; restoring full mask ROM\n"));
+
+        return pgm_ps3_mask_cache_restore_full();
+    }
+
+    memset(
+        PGMSPRMaskPageCache,
+        0,
+        PGM_PS3_MASK_CACHE_PAGES *
+        PGM_PS3_MASK_PAGE_SIZE);
+
+    for (INT32 i = 0;
+         i < PGM_PS3_MASK_CACHE_PAGES;
+         i++) {
+        PGMSPRMaskPageTag[i] = -1;
+    }
+
+    g_ps3_mask_cache_misses = 0;
+    g_ps3_mask_cache_errors = 0;
+    nPGMSPRMaskFileCacheActive = 1;
+
+    bprintf(PRINT_IMPORTANT,
+        _T("[FBNeo] PS3 PGM mask file cache enabled: backing=%d cache=%u page=%u slots=%u saved=%u\n"),
+        nPGMSPRMaskROMLen,
+        (unsigned)(PGM_PS3_MASK_CACHE_PAGES *
+                   PGM_PS3_MASK_PAGE_SIZE),
+        (unsigned)PGM_PS3_MASK_PAGE_SIZE,
+        (unsigned)PGM_PS3_MASK_CACHE_PAGES,
+        (unsigned)(nPGMSPRMaskROMLen -
+                   PGM_PS3_MASK_CACHE_PAGES *
+                   PGM_PS3_MASK_PAGE_SIZE));
+
+    return 0;
+#endif
+}
+
+static void pgm_ps3_mask_cache_exit()
+{
+    if (nPGMSPRMaskFileCacheActive) {
+        bprintf(PRINT_IMPORTANT,
+            _T("[FBNeo] PS3 PGM mask cache stats: misses=%u read_errors=%u\n"),
+            g_ps3_mask_cache_misses,
+            g_ps3_mask_cache_errors);
+    }
+
+    nPGMSPRMaskFileCacheActive = 0;
+
+    if (PGMSPRMaskPageCache != NULL) {
+        BurnFree(PGMSPRMaskPageCache);
+        PGMSPRMaskPageCache = NULL;
+    }
+
+    for (INT32 i = 0;
+         i < PGM_PS3_MASK_CACHE_PAGES;
+         i++) {
+        PGMSPRMaskPageTag[i] = -1;
+    }
+
+    pgm_ps3_mask_cache_close_file();
+    remove(PS3_PGM_MASK_CACHE_PATH);
+}
+
 #endif
 
 UINT8 nPgmPalRecalc = 0;
@@ -1084,6 +1316,12 @@ INT32 pgmInit()
 		pPgmProtCallback();
 	}
 
+	#ifdef __PS3__
+	if (pgm_ps3_mask_cache_build()) {
+	        return 1;
+	}
+	#endif
+
 	bprintf(PRINT_IMPORTANT, _T("[FBNeo] PGM stage: protection ready, reset\n"));
 	PgmDoReset();
 	bprintf(PRINT_IMPORTANT, _T("[FBNeo] PGM initialization complete\n"));
@@ -1094,6 +1332,10 @@ INT32 pgmInit()
 INT32 pgmExit()
 {
 	pgmExitDraw();
+
+#ifdef __PS3__
+        pgm_ps3_mask_cache_exit();
+#endif
 
 	SekExit();
 	ZetExit();
