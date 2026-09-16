@@ -1,0 +1,60 @@
+FROM debian:13-slim
+
+ARG PS3DEV_REPO_REF=bc09c6292f1be95be874cfda9226ea9ba9ceaef3
+ARG PS3TOOLCHAIN_REF=e13aa539c07abe86cdbcd095dc1340492dbca213
+ARG PSL1GHT_REF=f649a08fd536a9e27c08c7db2d93a2d7ee4c3bbe
+ARG PS3LIBRARIES_REF=df6a3a867f55be032a9df30cbdf23664e197d430
+
+# librsx users should apply patches/psl1ght-rsx-context-callback-memory-clobber.patch
+# to the pinned PSL1GHT_REF before building applications that use RSX callbacks.
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PS3DEV=/opt/ps3dev-gcc13
+ENV PSL1GHT=/opt/ps3dev-gcc13
+ENV PORTLIBS=/opt/ps3dev-gcc13/portlibs/ppu
+ENV PATH=/opt/ps3dev-gcc13/bin:/opt/ps3dev-gcc13/ppu/bin:/opt/ps3dev-gcc13/spu/bin:${PATH}
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    autoconf \
+    automake \
+    bison \
+    build-essential \
+    ca-certificates \
+    curl \
+    file \
+    flex \
+    git \
+    libelf-dev \
+    libgmp-dev \
+    libncurses-dev \
+    libssl-dev \
+    libtool-bin \
+    patch \
+    pkg-config \
+    python3 \
+    python3-dev \
+    texinfo \
+    wget \
+    xz-utils \
+    zlib1g-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    git clone https://github.com/ps3dev/ps3dev.git /tmp/ps3dev; \
+    git -C /tmp/ps3dev checkout "${PS3DEV_REPO_REF}"; \
+    export PS3DEV_BUILD_DIR=/tmp/ps3dev-build; \
+    export LOCAL_TOOLCHAIN_BUILD=1; \
+    export PS3TOOLCHAIN_REF="${PS3TOOLCHAIN_REF}"; \
+    export PSL1GHT_REF="${PSL1GHT_REF}"; \
+    export PS3LIBRARIES_REF="${PS3LIBRARIES_REF}"; \
+    cd /tmp/ps3dev; \
+    ./build-all.sh 1 2; \
+    ppu-gcc --version | head -n 1; \
+    ppu-g++ --version | head -n 1; \
+    spu-gcc --version | head -n 1; \
+    test -f "${PSL1GHT}/ppu_rules"; \
+    cp "${PS3DEV}/build.txt" /opt/ps3dev-gcc13-build.txt || true; \
+    rm -rf /tmp/ps3dev /tmp/ps3dev-build
+
+WORKDIR /work
+CMD ["/bin/bash"]
