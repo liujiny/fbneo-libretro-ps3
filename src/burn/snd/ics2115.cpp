@@ -40,6 +40,32 @@
 
 static UINT8* m_rom = NULL;			// ics2115 rom
 static INT32 m_rom_mask;
+
+#ifdef __PS3__
+// PS3_KOV2_COMPACT_SOUND: logical hole removed from the physical sample-ROM allocation.
+static UINT32 m_rom_hole_start = 0;
+static UINT32 m_rom_hole_end = 0;
+
+void ics2115_set_rom_hole(UINT32 start, UINT32 end)
+{
+	m_rom_hole_start = start;
+	m_rom_hole_end = (end > start) ? end : start;
+	bprintf(PRINT_IMPORTANT, _T("[FBNeo] ICS2115 compact ROM hole: %x-%x (%x bytes)\n"),
+		m_rom_hole_start, m_rom_hole_end, m_rom_hole_end - m_rom_hole_start);
+}
+#endif
+
+static inline UINT8 ics2115_rom_read(UINT32 address)
+{
+	address &= m_rom_mask;
+#ifdef __PS3__
+	if (m_rom_hole_end > m_rom_hole_start) {
+		if (address >= m_rom_hole_start && address < m_rom_hole_end) return 0;
+		if (address >= m_rom_hole_end) address -= (m_rom_hole_end - m_rom_hole_start);
+	}
+#endif
+	return m_rom[address];
+}
 static void (*m_irq_cb)(INT32) = NULL;// cpu irq callback
 
 struct ics2115_voice {
@@ -206,6 +232,11 @@ void ics2115_init(void (*cpu_irq_cb)(INT32), UINT8 *sample_rom, INT32 sample_rom
 	m_irq_cb = cpu_irq_cb;
 	m_rom = sample_rom;
 	m_rom_mask = sample_rom_size - 1;
+#ifdef __PS3__
+	// Default to ordinary contiguous ROM. PGM enables the KOV2 hole after init.
+	m_rom_hole_start = 0;
+	m_rom_hole_end = 0;
+#endif
 
 	// compute volume table
 	for (INT32 i = 0; i < 4096; i++)
@@ -268,6 +299,10 @@ void ics2115_exit()
 
 	m_rom = NULL;
 	m_rom_mask = 0;
+#ifdef __PS3__
+	m_rom_hole_start = 0;
+	m_rom_hole_end = 0;
+#endif
 	m_irq_cb = NULL;
 
 	BurnFree(buffer);
@@ -442,13 +477,14 @@ static inline INT32 read_wavetable(ics2115_voice& voice, const UINT32 curr_addr)
 {
 	if (voice.osc_conf.bitflags.ulaw || voice.osc_conf.bitflags.eightbit)
 	{
+		const UINT8 sample = ics2115_rom_read(curr_addr);
 		if (voice.osc_conf.bitflags.ulaw)
-			return m_ulaw[m_rom[curr_addr & m_rom_mask]];
+			return m_ulaw[sample];
 
-		return ((INT8)(m_rom[curr_addr & m_rom_mask]) << 8) | ((m_rom[curr_addr & m_rom_mask] & 0x7F) << 1);
+		return ((INT8)sample << 8) | ((sample & 0x7F) << 1);
 	}
 
-	return ((INT8)(m_rom[(curr_addr + 1) & m_rom_mask]) << 8) | m_rom[(curr_addr + 0) & m_rom_mask];
+	return ((INT8)ics2115_rom_read(curr_addr + 1) << 8) | ics2115_rom_read(curr_addr + 0);
 }
 
 #if defined INTERPOLATE_AS_HARDWARE
