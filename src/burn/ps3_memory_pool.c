@@ -435,7 +435,8 @@ static int is_native_label(const char *label)
 		!strcmp(label, "Neo68KROM") ||
 		!strcmp(label, "NeoADPCM_A_ROM") ||
 		!strcmp(label, "NeoADPCM_B_ROM") ||
-		!strcmp(label, "PGMMaskPageCache");
+		!strcmp(label, "PGMMaskPageCache") ||
+		!strcmp(label, "PGMColorPageCache");
 #else
 	(void)label;
 	return 0;
