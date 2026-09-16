@@ -35,3 +35,22 @@ src/burner/libretro/m68kmake
 src/burner/libretro/pgmspritecreate
 !gamelist.txt
 !src/dep/generated/
+
+# Local PS3 builds and generated artifacts
+*.SELF
+*.elf
+*.pkg
+*.a
+*.log
+*:Zone.Identifier
+/.build-state/
+/build-logs/
+/dist-ab/
+/retroarch/
+/psl1ght-current-src/
+*.before-*
+*.maskcache-ok
+*.kov2-*-ok
+*.failed-native-api
+commands-*.nm
+commands-*.diff
