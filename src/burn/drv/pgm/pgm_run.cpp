@@ -166,10 +166,10 @@ static INT32 pgm_ps3_mask_cache_build()
     return 0;
 #else
     /*
-     * First validation target is KOV2 only.
-     * After validation this game-name gate can be removed.
+     * Generic PS3 PGM sprite-mask cache.
+     * Only sufficiently large power-of-two mask images are paged.
      */
-if (PGMSPRMaskROM == NULL ||
+    if (PGMSPRMaskROM == NULL ||
         nPGMSPRMaskROMLen <=
         (INT32)(PGM_PS3_MASK_CACHE_PAGES *
                 PGM_PS3_MASK_PAGE_SIZE)) {
@@ -1383,6 +1383,12 @@ INT32 pgmInit()
 	}
 
 #ifdef __PS3__
+	if (pgm_ps3_color_cache_build()) {
+		return 1;
+	}
+#endif
+
+#ifdef __PS3__
 	PS3_PGM_MEM_LABEL("PGMTileSharedAlloc");
 	PGMTileSharedAlloc = (UINT8*)BurnMalloc(nPGMTileROMLen + 0x400000);
 	PGMTileROM = PGMTileSharedAlloc;
@@ -1573,11 +1579,6 @@ INT32 pgmInit()
 
 	#ifdef __PS3__
 	if (pgm_ps3_mask_cache_build()) {
-	        return 1;
-	}
-	#endif
-	#ifdef __PS3__
-	if (pgm_ps3_color_cache_build()) {
 	        return 1;
 	}
 	#endif
