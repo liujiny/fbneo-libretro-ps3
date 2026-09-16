@@ -58,6 +58,15 @@ UINT8 *PGMARMRAM0, *PGMUSER0, *PGMARMRAM1, *PGMARMRAM2, *PGMARMShareRAM, *PGMARM
 
 UINT8 *ICSSNDROM;
 
+#ifdef __PS3__
+// PS3_KOV2_COMPACT_SOUND: keep KOV2 logical ICS2115 addresses while removing the 6 MiB XDR hole.
+static INT32 pgm_ps3_kov2_compact_sound()
+{
+	return (!bDoIpsPatch && strcmp(BurnDrvGetTextA(DRV_NAME), "kov2") == 0);
+}
+static INT32 nPGMSNDROMAllocLen = 0;
+#endif
+
 UINT8 nPgmPalRecalc = 0;
 static INT32 nPgmCurrentBios = -1;
 
@@ -147,6 +156,13 @@ static INT32 pgmGetRoms(bool bLoad)
 	UINT8 *PGMTileROMLoad = PGMTileROM + 0x180000;
 	UINT8 *PGMSPRMaskROMLoad = PGMSPRMaskROM;
 	UINT8 *PGMSNDROMLoad = ICSSNDROM + (kov2 ? 0x800000 : 0x400000);
+#ifdef __PS3__
+	// Physical KOV2 layout is compact on PS3: BIOS 2 MiB followed immediately by game samples.
+	// The ICS2115 reader remaps logical >= 0x800000 back by 0x600000.
+	if (bLoad && pgm_ps3_kov2_compact_sound()) {
+		PGMSNDROMLoad = ICSSNDROM + 0x200000;
+	}
+#endif
 
 	if (bLoad) {
 		if (nPGM68KROMLen == 0x80000 && nPGMSNDROMLen == 0x600000) { // dw2001 & dwpc
@@ -893,7 +909,17 @@ INT32 pgmInit()
 	PGMTileROMExp   = (UINT8*)BurnMalloc((nPGMTileROMLen / 5) * 8);	// Expanded 8x8 Text Tiles and 32x32 BG Tiles
 #endif
 	PGMSPRMaskROM	= (UINT8*)BurnMalloc(nPGMSPRMaskROMLen);
+#ifdef __PS3__
+	nPGMSNDROMAllocLen = nPGMSNDROMLen;
+	if (pgm_ps3_kov2_compact_sound() && nPGMSNDROMLen >= 0x800000) {
+		nPGMSNDROMAllocLen = nPGMSNDROMLen - 0x600000;
+		bprintf(PRINT_IMPORTANT, _T("[FBNeo] PS3 KOV2 compact sound: logical=%x physical=%x saved=%x\n"),
+			nPGMSNDROMLen, nPGMSNDROMAllocLen, nPGMSNDROMLen - nPGMSNDROMAllocLen);
+	}
+	ICSSNDROM		= (UINT8*)BurnMalloc(nPGMSNDROMAllocLen);
+#else
 	ICSSNDROM		= (UINT8*)BurnMalloc(nPGMSNDROMLen);
+#endif
 
 	pgmMemIndex();
 	INT32 nLen = MemEnd - (UINT8 *)0;
@@ -1030,6 +1056,11 @@ INT32 pgmInit()
 
 	v3021Init();
 	ics2115_init(ics2115_sound_irq, ICSSNDROM, nPGMSNDROMLen);
+#ifdef __PS3__
+	if (pgm_ps3_kov2_compact_sound()) {
+		ics2115_set_rom_hole(0x200000, 0x800000);
+	}
+#endif
 	ics_2115_set_volume(2.0);
 	BurnTimerAttachZet(Z80_FREQ);
 
