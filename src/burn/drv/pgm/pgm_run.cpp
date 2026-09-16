@@ -1301,6 +1301,7 @@ static INT32 expand_colourdata()
 
 #ifdef __PS3__
 	nPGMSPRColPacked = 1;
+	PS3_PGM_MEM_LABEL("PGMSPRColROM");
 	PGMSPRColROM = (UINT8*)BurnMalloc((nPGMSPRColPacked ? nPGMSPRColROMLen : expandedLen) + 128);
 #else
 	PGMSPRColROM = (UINT8*)BurnMalloc(expandedLen + 128);
@@ -1382,6 +1383,7 @@ INT32 pgmInit()
 	}
 
 #ifdef __PS3__
+	PS3_PGM_MEM_LABEL("PGMTileSharedAlloc");
 	PGMTileSharedAlloc = (UINT8*)BurnMalloc(nPGMTileROMLen + 0x400000);
 	PGMTileROM = PGMTileSharedAlloc;
 	PGMTileROMExp = PGMTileSharedAlloc;
@@ -1389,6 +1391,7 @@ INT32 pgmInit()
 	PGMTileROM      = (UINT8*)BurnMalloc(nPGMTileROMLen);			// 8x8 Text Tiles + 32x32 BG Tiles
 	PGMTileROMExp   = (UINT8*)BurnMalloc((nPGMTileROMLen / 5) * 8);	// Expanded 8x8 Text Tiles and 32x32 BG Tiles
 #endif
+	PS3_PGM_MEM_LABEL("PGMSPRMaskROM");
 	PGMSPRMaskROM	= (UINT8*)BurnMalloc(nPGMSPRMaskROMLen);
 #ifdef __PS3__
 	nPGMSNDROMAllocLen = nPGMSNDROMLen;
@@ -1397,8 +1400,10 @@ INT32 pgmInit()
 		bprintf(PRINT_IMPORTANT, _T("[FBNeo] PS3 KOV2 compact sound: logical=%x physical=%x saved=%x\n"),
 			nPGMSNDROMLen, nPGMSNDROMAllocLen, nPGMSNDROMLen - nPGMSNDROMAllocLen);
 	}
+	PS3_PGM_MEM_LABEL("ICSSNDROM");
 	ICSSNDROM		= (UINT8*)BurnMalloc(nPGMSNDROMAllocLen);
 #else
+	PS3_PGM_MEM_LABEL("ICSSNDROM");
 	ICSSNDROM		= (UINT8*)BurnMalloc(nPGMSNDROMLen);
 #endif
 
@@ -1407,6 +1412,7 @@ INT32 pgmInit()
 #ifdef __PS3__
 	bprintf(PRINT_IMPORTANT, _T("[FBNeo] PGM allocations: color=%p tile=%p expanded=%p mask=%p sound=%p main-bytes=%d\n"), PGMSPRColROM, PGMTileROM, PGMTileROMExp, PGMSPRMaskROM, ICSSNDROM, nLen);
 #endif
+	PS3_PGM_MEM_LABEL("PGMMainMem");
 	Mem = (UINT8 *)BurnMalloc(nLen);
 	if (PGMTileROM == NULL || PGMTileROMExp == NULL || PGMSPRMaskROM == NULL || ICSSNDROM == NULL || Mem == NULL) {
 		bprintf(PRINT_ERROR, _T("[FBNeo] PGM allocation FAILED: tile=%p expanded=%p mask=%p sound=%p main=%p\n"), PGMTileROM, PGMTileROMExp, PGMSPRMaskROM, ICSSNDROM, Mem);
