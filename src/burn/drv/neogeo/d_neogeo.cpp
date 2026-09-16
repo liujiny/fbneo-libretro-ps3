@@ -2205,6 +2205,62 @@ static void PCM2DecryptV2(const PCM2DecryptV2Info* const pInfo)
 {
 	// Decrypt V-ROMs
 
+#if defined(__PS3__) && defined(__PSL1GHT__)
+	/*
+	 * PS3 low-memory in-place PCM2 V2 decrypt.
+	 *
+	 * The generic path duplicates the entire 16 MiB V-ROM with
+	 * BurnMalloc(0x01000000). On PS3 this can fail late in Neo Geo init.
+	 * The old code then silently skips decryption, leaving mslug5 with
+	 * valid video but noise.
+	 *
+	 * The transform is a permutation of the 24-bit V-ROM address space,
+	 * so it can be applied in place by walking permutation cycles.
+	 * A 1-bit-per-byte visited map costs 2 MiB instead of a 16 MiB copy.
+	 */
+	const UINT32 nSize = 0x01000000;
+	const UINT32 nMask = nSize - 1;
+	UINT8* pVisited = (UINT8*)BurnMalloc(nSize >> 3);
+
+	if (pVisited) {
+		UINT8* pRom = YM2610ADPCMAROM[nNeoActiveSlot];
+		memset(pVisited, 0, nSize >> 3);
+
+		for (UINT32 nStart = 0; nStart < nSize; nStart++) {
+			const UINT8 nVisitedMask = (UINT8)(1U << (nStart & 7));
+
+			if (pVisited[nStart >> 3] & nVisitedMask) {
+				continue;
+			}
+
+			UINT32 nCurrent = nStart;
+			UINT8 nCarry = pRom[nCurrent];
+
+			do {
+				const UINT32 i =
+					(nCurrent - (UINT32)pInfo->nAddressXor) & nMask;
+				const UINT32 nAddress =
+					(((i & 0x00FEFFFE) |
+					  ((i & 0x00010000) >> 16) |
+					  ((i & 0x00000001) << 16)) ^
+					 (UINT32)pInfo->nAddressOffset) & nMask;
+
+				const UINT8 nNextCarry = pRom[nAddress];
+
+				pRom[nAddress] =
+					nCarry ^ pInfo->nDataXor[nAddress & 0x07];
+
+				pVisited[nCurrent >> 3] |=
+					(UINT8)(1U << (nCurrent & 7));
+
+				nCurrent = nAddress;
+				nCarry = nNextCarry;
+			} while (nCurrent != nStart);
+		}
+
+		BurnFree(pVisited);
+	}
+#else
 	UINT8* pTemp = (UINT8*)BurnMalloc(0x01000000);
 
 	if (pTemp) {
@@ -2218,6 +2274,7 @@ static void PCM2DecryptV2(const PCM2DecryptV2Info* const pInfo)
 
 		BurnFree(pTemp);
 	}
+#endif
 }
 
 static void PCM2DecryptP2(const PCM2DecryptP2Info* const pInfo)
