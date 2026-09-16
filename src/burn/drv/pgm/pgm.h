@@ -25,6 +25,40 @@ extern UINT8 *PGMTileROM;
 extern UINT8 *PGMTileROMExp;
 extern UINT8 *PGMSPRColROM;
 extern UINT8 *PGMSPRMaskROM;
+
+#ifdef __PS3__
+#define PGM_PS3_MASK_PAGE_SHIFT 16
+#define PGM_PS3_MASK_PAGE_SIZE  (1u << PGM_PS3_MASK_PAGE_SHIFT)
+#define PGM_PS3_MASK_CACHE_PAGES 64
+#define PGM_PS3_MASK_CACHE_MASK  (PGM_PS3_MASK_CACHE_PAGES - 1)
+
+extern UINT8 *PGMSPRMaskPageCache;
+extern INT32 PGMSPRMaskPageTag[PGM_PS3_MASK_CACHE_PAGES];
+extern INT32 nPGMSPRMaskFileCacheActive;
+
+UINT8 *pgm_ps3_mask_cache_miss(UINT32 page);
+
+static inline UINT8 pgm_ps3_mask_read(UINT32 offset)
+{
+	offset &= (UINT32)nPGMSPRMaskMaskLen;
+
+	if (!nPGMSPRMaskFileCacheActive) {
+		return PGMSPRMaskROM[offset];
+	}
+
+	UINT32 page = offset >> PGM_PS3_MASK_PAGE_SHIFT;
+	UINT32 slot = page & PGM_PS3_MASK_CACHE_MASK;
+
+	if (PGMSPRMaskPageTag[slot] != (INT32)page) {
+		pgm_ps3_mask_cache_miss(page);
+	}
+
+	return PGMSPRMaskPageCache[
+		(slot << PGM_PS3_MASK_PAGE_SHIFT) +
+		(offset & (PGM_PS3_MASK_PAGE_SIZE - 1))
+	];
+}
+#endif
 extern UINT8 *PGMARMROM;
 extern UINT8 *PGMUSER0;
 extern UINT8 *PGMProtROM;
