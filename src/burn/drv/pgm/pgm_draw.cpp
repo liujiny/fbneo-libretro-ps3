@@ -1,6 +1,13 @@
 #include "pgm.h"
 #include "pgm_sprite.h"
 
+#ifdef __PS3__
+#include "../../ps3_memory_pool.h"
+#define PS3_PGM_MEM_LABEL(x) ps3_mem_diag_set_next_label(x)
+#else
+#define PS3_PGM_MEM_LABEL(x) ((void)0)
+#endif
+
 /*
 	Video flag notes (b0e000 writes)
 
@@ -1159,11 +1166,14 @@ static void pgmBlendCopy()
 INT32 pgmDraw()
 {
 	if (pTempDraw == NULL) {
+		PS3_PGM_MEM_LABEL("PGMTempDraw");
 		pTempDraw = (UINT16*)BurnMalloc(0x400 * 0x200 * sizeof(INT16));
+		PS3_PGM_MEM_LABEL("PGMSpritePrio");
 		SpritePrio = (UINT8*)BurnMalloc(nScreenWidth * nScreenHeight);
+		PS3_PGM_MEM_LABEL("PGMTempScreen");
 		pTempScreen = (UINT16*)BurnMalloc(nScreenWidth * nScreenHeight * sizeof(INT16));
 		if (pTempDraw == NULL || SpritePrio == NULL || pTempScreen == NULL) {
-			bprintf(PRINT_ERROR, _T("[FBNeo] PGM lazy draw-buffer allocation failed.\n"));
+			bprintf(PRINT_ERROR, _T("[FBNeo] PGM lazy draw-buffer allocation failed: draw=%p prio=%p screen=%p\n"), (void*)pTempDraw, (void*)SpritePrio, (void*)pTempScreen);
 			return 1;
 		}
 #ifdef __PS3__
@@ -1319,6 +1329,7 @@ void pgmInitDraw() // preprocess some things...
 {
 	GenericTilesInit();
 #ifdef __PS3__
+	PS3_PGM_MEM_LABEL("PGMBgTileCache");
 	pgmBgTileCache = (UINT8*)BurnMalloc(PGM_BG_CACHE_TILES * 0x400);
 	for (INT32 i = 0; i < PGM_BG_CACHE_TILES; i++) pgmBgTileTag[i] = -1;
 #endif
