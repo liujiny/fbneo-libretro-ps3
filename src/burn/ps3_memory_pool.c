@@ -8,7 +8,24 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <malloc.h>
+
+#if defined(__PSL1GHT__)
+#include <ppu-types.h>
 #include <sys/memory.h>
+typedef sys_mem_addr_t ps3_native_addr_t;
+#define PS3_NATIVE_ALLOC(size, flags, out_addr) \
+    sysMemoryAllocate((size), (flags), (out_addr))
+#define PS3_NATIVE_FREE(addr) \
+    sysMemoryFree((addr))
+#else
+#include <sys/memory.h>
+typedef sys_addr_t ps3_native_addr_t;
+#define PS3_NATIVE_ALLOC(size, flags, out_addr) \
+    sys_memory_allocate((size), (flags), (out_addr))
+#define PS3_NATIVE_FREE(addr) \
+    sys_memory_free((addr))
+#endif
 #if defined(PS3_MEMORY_DIAGNOSTIC) && PS3_MEMORY_DIAGNOSTIC
 #include <stdio.h>
 #include <stdarg.h>
@@ -430,19 +447,19 @@ static void *native_malloc(size_t size, size_t requested_size, const char *label
 	size_t page_size = 0x10000u;
 	uint64_t page_flag = (page_size == 0x100000u) ? SYS_MEMORY_PAGE_SIZE_1M : SYS_MEMORY_PAGE_SIZE_64K;
 	size_t allocated_size = align_up(size, page_size);
-	sys_addr_t address = 0;
+	ps3_native_addr_t address = 0;
 	int result;
 	int slot;
 
 	diag_native_user_memory("before_native_allocate");
-	result = sys_memory_allocate(allocated_size, page_flag, &address);
+	result = PS3_NATIVE_ALLOC(allocated_size, page_flag, &address);
 	if (result != 0 && page_flag == SYS_MEMORY_PAGE_SIZE_1M) {
 		DIAG_PRINT("[PS3 MEM] NATIVE RETRY label=%s requested_size=%lu first_page_size=1048576 result=0x%08x\n",
 			label, (unsigned long)requested_size, (unsigned)result);
 		page_size = 0x10000u;
 		page_flag = SYS_MEMORY_PAGE_SIZE_64K;
 		allocated_size = align_up(size, page_size);
-		result = sys_memory_allocate(allocated_size, page_flag, &address);
+		result = PS3_NATIVE_ALLOC(allocated_size, page_flag, &address);
 	}
 	if (result != 0) {
 		g_native_failure_count++;
@@ -458,7 +475,7 @@ static void *native_malloc(size_t size, size_t requested_size, const char *label
 		if (g_native_allocations[slot].ptr == NULL) break;
 	}
 	if (slot == NATIVE_ALLOCATION_MAX) {
-		sys_memory_free(address);
+		PS3_NATIVE_FREE(address);
 		g_native_failure_count++;
 		g_native_failure_bytes += requested_size;
 		DIAG_PRINT("[PS3 MEM] NATIVE FAIL label=%s reason=tracking_table_full\n", label);
@@ -516,12 +533,16 @@ void pool_destroy(void)
 {
 	int i;
 	ps3_mem_diag_summary("pool_destroy");
+#if PS3_NATIVE_MEMORY
 	for (i = 0; i < NATIVE_ALLOCATION_MAX; i++) {
 		if (g_native_allocations[i].ptr != NULL) {
-			sys_memory_free((sys_addr_t)(uintptr_t)g_native_allocations[i].ptr);
+			PS3_NATIVE_FREE((ps3_native_addr_t)(uintptr_t)g_native_allocations[i].ptr);
 			g_native_allocations[i].ptr = NULL;
 		}
 	}
+#else
+	(void)i;
+#endif
 	g_native_live = 0;
 	if (g_pool != NULL) free(g_pool);
 	g_pool = NULL;
@@ -632,11 +653,12 @@ void pool_free(void *ptr)
 	pool_block *block;
 	int i;
 	if (ptr == NULL) return;
+#if PS3_NATIVE_MEMORY
 	for (i = 0; i < NATIVE_ALLOCATION_MAX; i++) {
 		if (g_native_allocations[i].ptr == ptr) {
 			int result;
 			diag_native_user_memory("before_native_free");
-			result = sys_memory_free((sys_addr_t)(uintptr_t)ptr);
+			result = PS3_NATIVE_FREE((ps3_native_addr_t)(uintptr_t)ptr);
 			DIAG_PRINT("[PS3 MEM] NATIVE FREE label=%s ptr=%p allocated_size=%lu result=0x%08x\n",
 				g_native_allocations[i].label, ptr,
 				(unsigned long)g_native_allocations[i].allocated_size, (unsigned)result);
@@ -650,6 +672,7 @@ void pool_free(void *ptr)
 			return;
 		}
 	}
+#else
 	block = (pool_block *)((uint8_t *)ptr - sizeof(pool_block));
 	if (block->magic == FALLBACK_MAGIC) {
 		diag_live_remove(ptr);
@@ -674,5 +697,6 @@ void pool_free(void *ptr)
 		prev->next = block->next;
 		if (prev->next != NULL) prev->next->prev = prev;
 	}
+#endif
 }
 #endif
