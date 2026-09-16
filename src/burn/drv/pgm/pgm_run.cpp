@@ -409,13 +409,9 @@ static INT32 pgm_ps3_color_cache_build()
     return 0;
 #else
     /*
-     * First validation target: KOV2.
-     * DDP2 and any unpacked-color path remain untouched.
+     * Generic PS3 PGM packed sprite-color cache.
+     * Any unpacked-color path remains resident.
      */
-    if (strcmp(BurnDrvGetTextA(DRV_NAME), "kov2") != 0) {
-        return 0;
-    }
-
     if (!nPGMSPRColPacked ||
         PGMSPRColROM == NULL) {
         return 0;
@@ -425,7 +421,12 @@ static INT32 pgm_ps3_color_cache_build()
         PGM_PS3_COLOR_CACHE_PAGES *
         PGM_PS3_COLOR_PAGE_SIZE;
 
-    if ((UINT32)nPGMSPRColROMLen <= cache_bytes) {
+    /*
+     * Avoid paying file-I/O cost for a tiny memory saving.
+     * Require at least 4 MiB of resident-memory reduction.
+     */
+    if ((UINT32)nPGMSPRColROMLen <
+        cache_bytes + (4u * 1024u * 1024u)) {
         return 0;
     }
 
