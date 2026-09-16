@@ -709,27 +709,33 @@ static void pgm_drawsprites()
 	
 	while (source < finish)
 	{
+		const UINT16 s0 = BURN_ENDIAN_SWAP_INT16(source[0]);
+		const UINT16 s1 = BURN_ENDIAN_SWAP_INT16(source[1]);
+		const UINT16 s2 = BURN_ENDIAN_SWAP_INT16(source[2]);
+		const UINT16 s3 = BURN_ENDIAN_SWAP_INT16(source[3]);
+		const UINT16 s4 = BURN_ENDIAN_SWAP_INT16(source[4]);
+
 		if (!OldCodeMode) {
-			if ((source[4] & 0x7fff) == 0) break;	// verified on hardware
+			if ((s4 & 0x7fff) == 0) break;	// verified on hardware
 		} else {
-			if (source[4] == 0) break;				// right?
+			if (s4 == 0) break;				// right?
 		}
 
-		INT32 xpos =  BURN_ENDIAN_SWAP_INT16(source[0]) & 0x07ff;
-		INT32 ypos =  BURN_ENDIAN_SWAP_INT16(source[1]) & 0x03ff;
-		INT32 xzom = (BURN_ENDIAN_SWAP_INT16(source[0]) & 0x7800) >> 11;
-		INT32 xgrow= (BURN_ENDIAN_SWAP_INT16(source[0]) & 0x8000) >> 15;
-		INT32 yzom = (BURN_ENDIAN_SWAP_INT16(source[1]) & 0x7800) >> 11;
-		INT32 ygrow= (BURN_ENDIAN_SWAP_INT16(source[1]) & 0x8000) >> 15;
-		INT32 palt = (BURN_ENDIAN_SWAP_INT16(source[2]) & 0x1f00) >> 8;
-		INT32 flip = (BURN_ENDIAN_SWAP_INT16(source[2]) & 0x6000) >> 13;
-		INT32 boff =((BURN_ENDIAN_SWAP_INT16(source[2]) & 0x007f) << 16) | (BURN_ENDIAN_SWAP_INT16(source[3]) & 0xffff);
-		INT32 wide = (BURN_ENDIAN_SWAP_INT16(source[4]) & 0x7e00) >> 9;
-		INT32 prio = (BURN_ENDIAN_SWAP_INT16(source[2]) & 0x0080) >> 7;
-		INT32 high =  BURN_ENDIAN_SWAP_INT16(source[4]) & 0x01ff;
+		INT32 xpos =  s0 & 0x07ff;
+		INT32 ypos =  s1 & 0x03ff;
+		INT32 xzom = (s0 & 0x7800) >> 11;
+		INT32 xgrow= (s0 & 0x8000) >> 15;
+		INT32 yzom = (s1 & 0x7800) >> 11;
+		INT32 ygrow= (s1 & 0x8000) >> 15;
+		INT32 palt = (s2 & 0x1f00) >> 8;
+		INT32 flip = (s2 & 0x6000) >> 13;
+		INT32 boff =((s2 & 0x007f) << 16) | (s3 & 0xffff);
+		INT32 wide = (s4 & 0x7e00) >> 9;
+		INT32 prio = (s2 & 0x0080) >> 7;
+		INT32 high =  s4 & 0x01ff;
 
 		if ((0 != nPGMSpriteBufferHack) || (OldCodeMode)) {
-			if (source[2] & 0x8000) boff += 0x800000; // Real hardware does not have this! Useful for some rom hacks.
+			if (s2 & 0x8000) boff += 0x800000; // Real hardware does not have this! Useful for some rom hacks.
 		}
 
 		if (xgrow) xzom = 0x10-xzom;

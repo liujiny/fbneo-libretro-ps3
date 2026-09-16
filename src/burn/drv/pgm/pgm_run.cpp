@@ -1133,10 +1133,17 @@ static void pgm_sprite_buffer()
 		{
 			for (INT32 j = 0; j < 10 / 2; j++)
 			{
-				PGMSprBuf[(i / (10 / 2)) * (16 / 2) + j] = ram16[i + j] & mask[nPGMSpriteBufferHack][j];
+				// The mask values describe logical 68K bits. On a big-endian
+				// host such as PS3, ram16[] is still in the emulator's stored
+				// byte order, so masking it directly clears the wrong bits.
+				UINT16 word = BURN_ENDIAN_SWAP_INT16(ram16[i + j]);
+				word &= mask[nPGMSpriteBufferHack][j];
+				PGMSprBuf[(i / (10 / 2)) * (16 / 2) + j] =
+					BURN_ENDIAN_SWAP_INT16(word);
 			} 
 
-			if ((ram16[i+4] & 0x7fff) == 0) break; // verified on hardware
+			const UINT16 sizeword = BURN_ENDIAN_SWAP_INT16(ram16[i + 4]);
+			if ((sizeword & 0x7fff) == 0) break; // verified on hardware
 		}
 	}
 }
