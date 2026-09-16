@@ -93,9 +93,11 @@
 
 	#if defined( _WIN32 )
 		#include <windows.h>
-	#else // defined( _WIN32 )
+	#elif defined( __PSL1GHT__ )
+		#include <lv2/mutex.h>
+	#else
 		#include <pthread.h>
-	#endif // defined( _WIN32 )
+	#endif
 
 	#define R8B_CONST static const
 	#define R8B_NULL NULL
@@ -518,22 +520,31 @@ public:
 	{
 		#if defined( _WIN32 )
 			InitializeCriticalSectionAndSpinCount( &CritSec, 2000 );
-		#else // defined( _WIN32 )
+		#elif defined( __PSL1GHT__ )
+			sys_lwmutex_attr_t MutexAttrs = {
+				SYS_LWMUTEX_PROTOCOL_PRIO,
+				SYS_LWMUTEX_ATTR_RECURSIVE,
+				{ 'r', '8', 'b', 'm', 't', 'x', 0, 0 }
+			};
+			sysLwMutexCreate( &Mutex, &MutexAttrs );
+		#else
 			pthread_mutexattr_t MutexAttrs;
 			pthread_mutexattr_init( &MutexAttrs );
 			pthread_mutexattr_settype( &MutexAttrs, PTHREAD_MUTEX_RECURSIVE );
 			pthread_mutex_init( &Mutex, &MutexAttrs );
 			pthread_mutexattr_destroy( &MutexAttrs );
-		#endif // defined( _WIN32 )
+		#endif
 	}
 
 	~CSyncObject()
 	{
 		#if defined( _WIN32 )
 			DeleteCriticalSection( &CritSec );
-		#else // defined( _WIN32 )
+		#elif defined( __PSL1GHT__ )
+			sysLwMutexDestroy( &Mutex );
+		#else
 			pthread_mutex_destroy( &Mutex );
-		#endif // defined( _WIN32 )
+		#endif
 	}
 
 	/**
@@ -545,9 +556,11 @@ public:
 	{
 		#if defined( _WIN32 )
 			EnterCriticalSection( &CritSec );
-		#else // defined( _WIN32 )
+		#elif defined( __PSL1GHT__ )
+			sysLwMutexLock( &Mutex, 0 );
+		#else
 			pthread_mutex_lock( &Mutex );
-		#endif // defined( _WIN32 )
+		#endif
 	}
 
 	/**
@@ -559,18 +572,22 @@ public:
 	{
 		#if defined( _WIN32 )
 			LeaveCriticalSection( &CritSec );
-		#else // defined( _WIN32 )
+		#elif defined( __PSL1GHT__ )
+			sysLwMutexUnlock( &Mutex );
+		#else
 			pthread_mutex_unlock( &Mutex );
-		#endif // defined( _WIN32 )
+		#endif
 	}
 
 private:
 	#if defined( _WIN32 )
 		CRITICAL_SECTION CritSec; ///< Standard Windows critical section
 			///< structure.
-	#else // defined( _WIN32 )
+	#elif defined( __PSL1GHT__ )
+		sys_lwmutex_t Mutex; ///< PSL1GHT lightweight recursive mutex.
+	#else
 		pthread_mutex_t Mutex; ///< pthread.h mutex object.
-	#endif // defined( _WIN32 )
+	#endif
 };
 
 /**

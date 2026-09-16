@@ -250,7 +250,8 @@ else ifneq (,$(filter $(platform), ps3 psl1ght))
 	PS3_PERF_FLAGS := -O3 -maltivec -mabi=altivec -fstrict-aliasing \
 		-fomit-frame-pointer -ffast-math
 	ifeq ($(platform), psl1ght)
-       PLATFORM_DEFINES += -D__PSL1GHT__
+       PLATFORM_DEFINES += -D__PSL1GHT__ \
+		-I$(PSL1GHT)/ppu/include
 	endif
 	ENDIANNESS_DEFINES =  -DWORDS_BIGENDIAN
 	# RetroArch no longer vendors zlib, build our own copy
