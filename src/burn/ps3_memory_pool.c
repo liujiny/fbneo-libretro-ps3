@@ -133,7 +133,7 @@ static size_t g_native_live, g_native_peak, g_native_count, g_native_bytes;
 static size_t g_native_failure_count, g_native_failure_bytes;
 
 #if defined(PS3_MEMORY_DIAGNOSTIC) && PS3_MEMORY_DIAGNOSTIC
-#define PS3_MEMORY_DIAGNOSTIC_LOG_PATH "/dev_hdd0/game/ARCD00001/USRDIR/fbneo-ps3-memory.log"
+#define PS3_MEMORY_DIAGNOSTIC_LOG_PATH "/dev_hdd0/tmp/fbneo-ps3-memory.log"
 static FILE *g_diag_file;
 static unsigned long g_last_available_user_memory;
 static int g_last_available_user_memory_valid;
@@ -157,7 +157,7 @@ static void diag_print(const char *format, ...)
 
 static void diag_native_user_memory(const char *stage)
 {
-#if defined(PS3_MEMORY_DIAGNOSTIC) && PS3_MEMORY_DIAGNOSTIC
+#if defined(PS3_MEMORY_DIAGNOSTIC) && PS3_MEMORY_DIAGNOSTIC && !defined(__PSL1GHT__)
 	sys_memory_info_t info;
 	int result = sys_memory_get_user_memory_size(&info);
 	if (result == 0) {
