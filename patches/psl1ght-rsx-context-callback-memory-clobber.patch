@@ -1,0 +1,13 @@
+diff --git a/ppu/include/rsx/rsx_function_macros.h b/ppu/include/rsx/rsx_function_macros.h
+index bffc3a1..91ee913 100644
+--- a/ppu/include/rsx/rsx_function_macros.h
++++ b/ppu/include/rsx/rsx_function_macros.h
+@@ -26,7 +26,7 @@
+             "addi	1,1,128\n"
+             : "+r"(result)
+             : "r"(context), "r"(count), "b"(context->callback)
+-            : "r31", "r0", "lr"
++            : "r31", "r0", "lr", "memory"
+ 		);
+ 		return result;
+ 	}
