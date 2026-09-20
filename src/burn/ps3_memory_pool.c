@@ -1,5 +1,11 @@
 #include "ps3_memory_pool.h"
 
+#if defined(__PS3__) && defined(PS3_PGM_PERF_PROFILE) && PS3_PGM_PERF_PROFILE
+#include <features/features_cpu.h>
+#include <ppu_intrinsics.h>
+#include <string.h>
+#endif
+
 #ifndef PS3_FBNEO_VERBOSE_DIAGNOSTICS
 #define PS3_FBNEO_VERBOSE_DIAGNOSTICS 0
 #endif
@@ -9,6 +15,120 @@
 #include <stdlib.h>
 #include <string.h>
 #include <malloc.h>
+
+#if defined(PS3_PGM_PERF_PROFILE) && PS3_PGM_PERF_PROFILE
+ps3_perf_stats g_ps3_perf_stats;
+#define PS3_PERF_TRACKED_PAGES 4096u
+static unsigned char g_ps3_perf_mask_pages[PS3_PERF_TRACKED_PAGES / 8];
+static unsigned char g_ps3_perf_color_pages[PS3_PERF_TRACKED_PAGES / 8];
+static unsigned int g_ps3_perf_last_page[2];
+static int g_ps3_perf_last_page_valid[2];
+
+unsigned long long ps3_perf_now_us(void)
+{
+	/* PS3 time base is 79.8 MHz: 798 ticks per 10 microseconds.
+	 * __mftb is userspace and avoids an LV2 time syscall in sampled hot paths.
+	 */
+	return ((unsigned long long)__mftb() * 10ULL) / 798ULL;
+}
+
+void ps3_perf_record_time(enum ps3_perf_metric metric, unsigned long long us)
+{
+	switch (metric) {
+		case PS3_PERF_SPRITE_DRAW: g_ps3_perf_stats.sprite_draw_us += us; break;
+		case PS3_PERF_SPRITE_DECODE: g_ps3_perf_stats.sprite_decode_us += us; break;
+		case PS3_PERF_SPRITE_RASTER: g_ps3_perf_stats.sprite_raster_sampled_us += us; break;
+		case PS3_PERF_SPRITE_NOZOOM: g_ps3_perf_stats.sprite_nozoom_us += us; g_ps3_perf_stats.sprite_nozoom_count++; break;
+		case PS3_PERF_SPRITE_ZOOM: g_ps3_perf_stats.sprite_zoom_us += us; g_ps3_perf_stats.sprite_zoom_count++; break;
+		case PS3_PERF_COLOR_EXPAND: g_ps3_perf_stats.color_expand_sampled_us += us; break;
+		case PS3_PERF_COLOR_SPU: g_ps3_perf_stats.color_spu_sampled_us += us; g_ps3_perf_stats.color_spu_samples++; break;
+		case PS3_PERF_COLOR_PPU: g_ps3_perf_stats.color_ppu_sampled_us += us; g_ps3_perf_stats.color_ppu_samples++; break;
+		case PS3_PERF_AUDIO: g_ps3_perf_stats.audio_us += us; break;
+		case PS3_PERF_VIDEO: g_ps3_perf_stats.video_us += us; break;
+	}
+}
+
+void ps3_perf_record_sprite_count(unsigned int count)
+{
+	g_ps3_perf_stats.sprite_count_total += count;
+}
+
+void ps3_perf_record_cache_page(enum ps3_perf_cache cache, unsigned int page)
+{
+	unsigned int cache_index = cache == PS3_PERF_MASK_CACHE ? 0 : 1;
+	unsigned char *seen = cache_index == 0 ?
+		g_ps3_perf_mask_pages : g_ps3_perf_color_pages;
+	ps3_perf_cache_stats *stats = cache_index == 0 ?
+		&g_ps3_perf_stats.mask : &g_ps3_perf_stats.color;
+
+	if (page < PS3_PERF_TRACKED_PAGES) {
+		unsigned char bit = (unsigned char)(1u << (page & 7));
+		unsigned int byte = page >> 3;
+		if (seen[byte] & bit) stats->repeated_page_reads++;
+		else seen[byte] |= bit;
+	}
+	if (g_ps3_perf_last_page_valid[cache_index]) {
+		unsigned int previous = g_ps3_perf_last_page[cache_index];
+		if (page == previous + 1) stats->sequential_page_reads++;
+		if (page == previous + 1 || previous == page + 1)
+			stats->adjacent_page_reads++;
+	}
+	g_ps3_perf_last_page[cache_index] = page;
+	g_ps3_perf_last_page_valid[cache_index] = 1;
+}
+
+void ps3_perf_reset(void)
+{
+	memset(&g_ps3_perf_stats, 0, sizeof(g_ps3_perf_stats));
+	memset(g_ps3_perf_mask_pages, 0, sizeof(g_ps3_perf_mask_pages));
+	memset(g_ps3_perf_color_pages, 0, sizeof(g_ps3_perf_color_pages));
+	memset(g_ps3_perf_last_page_valid, 0, sizeof(g_ps3_perf_last_page_valid));
+}
+
+void ps3_perf_record_cache_io(enum ps3_perf_cache cache, unsigned seeks, unsigned reads,
+	unsigned long long bytes, unsigned long long us)
+{
+	ps3_perf_cache_stats *stats = cache == PS3_PERF_MASK_CACHE ?
+		&g_ps3_perf_stats.mask : &g_ps3_perf_stats.color;
+	stats->seeks += seeks;
+	stats->reads += reads;
+	stats->bytes_read += bytes;
+	stats->io_us += us;
+}
+
+void ps3_perf_record_prefetch(unsigned int issued, unsigned int hits,
+	unsigned int wasted, unsigned int bytes, unsigned int avoided)
+{
+	g_ps3_perf_stats.prefetch_issued += issued;
+	g_ps3_perf_stats.prefetch_hits += hits;
+	g_ps3_perf_stats.prefetch_wasted += wasted;
+	g_ps3_perf_stats.prefetch_bytes += bytes;
+	g_ps3_perf_stats.avoided_sync_reads += avoided;
+}
+
+void ps3_perf_record_prefetch_io(unsigned seeks, unsigned reads,
+	unsigned long long bytes, unsigned long long us)
+{
+	g_ps3_perf_stats.color.seeks += seeks;
+	g_ps3_perf_stats.color.reads += reads;
+	g_ps3_perf_stats.color.bytes_read += bytes;
+	g_ps3_perf_stats.color.async_io_us += us;
+}
+
+void ps3_perf_frame_sample(unsigned long long frame_us, ps3_perf_stats *out)
+{
+	g_ps3_perf_stats.frames++;
+	g_ps3_perf_stats.frame_total_us += frame_us;
+	if (frame_us > g_ps3_perf_stats.frame_max_us)
+		g_ps3_perf_stats.frame_max_us = frame_us;
+	if (g_ps3_perf_stats.frames >= 120) {
+		if (out) *out = g_ps3_perf_stats;
+		memset(&g_ps3_perf_stats, 0, sizeof(g_ps3_perf_stats));
+	} else if (out) {
+		memset(out, 0, sizeof(*out));
+	}
+}
+#endif
 
 #if defined(__PSL1GHT__)
 #include <ppu-types.h>
@@ -138,14 +258,19 @@ static FILE *g_diag_file;
 static unsigned long g_last_available_user_memory;
 static int g_last_available_user_memory_valid;
 
+static void diag_vprint(const char *format, va_list args)
+{
+	FILE *output = g_diag_file ? g_diag_file : stderr;
+	vfprintf(output, format, args);
+	fflush(output);
+}
+
 static void diag_print(const char *format, ...)
 {
 	va_list args;
-	FILE *output = g_diag_file ? g_diag_file : stderr;
 	va_start(args, format);
-	vfprintf(output, format, args);
+	diag_vprint(format, args);
 	va_end(args);
-	fflush(output);
 }
 
 #define DIAG_PRINT(...) diag_print(__VA_ARGS__)
@@ -186,6 +311,19 @@ void ps3_mem_diag_game_info(const char *path, const void *data, size_t size)
 void ps3_mem_diag_note(const char *message, size_t value)
 {
 	DIAG_PRINT("[PS3 MEM] %s=%lu\n", message ? message : "value", (unsigned long)value);
+}
+
+void ps3_mem_diag_logf(const char *format, ...)
+{
+#if defined(PS3_MEMORY_DIAGNOSTIC) && PS3_MEMORY_DIAGNOSTIC
+	va_list args;
+	va_start(args, format);
+	diag_print("[PS3 PGM PERF] ");
+	diag_vprint(format, args);
+	va_end(args);
+#else
+	(void)format;
+#endif
 }
 
 void ps3_mem_diag_frame_event(const char *event, unsigned frame, long value)
@@ -293,6 +431,7 @@ static void update_tracked_peak(void)
 
 void ps3_mem_diag_reset(void)
 {
+	ps3_perf_reset();
 #if defined(PS3_MEMORY_DIAGNOSTIC) && PS3_MEMORY_DIAGNOSTIC
 	if (g_diag_file != NULL) fclose(g_diag_file);
 	g_diag_file = fopen(PS3_MEMORY_DIAGNOSTIC_LOG_PATH, "ab");
@@ -680,6 +819,11 @@ void pool_free(void *ptr)
 		}
 	}
 #else
+	(void)i;
+#endif
+	/* Native allocations share this entry point with pool and aligned
+	 * fallback allocations.  A pointer not found in the native table must
+	 * still be released through the legacy allocator path. */
 	block = (pool_block *)((uint8_t *)ptr - sizeof(pool_block));
 	if (block->magic == FALLBACK_MAGIC) {
 		diag_live_remove(ptr);
@@ -704,6 +848,5 @@ void pool_free(void *ptr)
 		prev->next = block->next;
 		if (prev->next != NULL) prev->next->prev = prev;
 	}
-#endif
 }
 #endif

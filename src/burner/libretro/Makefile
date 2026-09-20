@@ -238,9 +238,14 @@ else ifneq (,$(filter $(platform), ps3 psl1ght))
 	SPLIT_UP_LINK = 1
 	PS3_MEMORY_DIAGNOSTIC ?= 0
 	PS3_MEMORY_POOL_SIZE_MB ?= 64
-	PS3_NATIVE_MEMORY ?= 0
+	PS3_NATIVE_MEMORY ?= 1
 	PS3_PGM_MASK_FILE_CACHE ?= 0
-    PS3_PGM_COLOR_FILE_CACHE ?= 0
+	PS3_PGM_COLOR_FILE_CACHE ?= 1
+	PS3_PGM_PERF_PROFILE ?= 0
+	PS3_PGM_SPU_WORKER ?= 0
+	PS3_PGM_SPU_SHADOW_INTERVAL ?= 1
+	PS3_PGM_COLOR_CACHE_2WAY ?= 1
+	PS3_PGM_COLOR_PREFETCH ?= 0
 	# Keep FBNeo's many independent objects from exhausting the PPU 64 KiB TOC
 	# when linked into the PS3 RetroArch frontend.
 	PLATFORM_DEFINES += -D__PS3__ -mminimal-toc \
@@ -249,9 +254,13 @@ else ifneq (,$(filter $(platform), ps3 psl1ght))
 		-DPS3_MEMORY_POOL_SIZE_MB=$(PS3_MEMORY_POOL_SIZE_MB) \
 		-DPS3_NATIVE_MEMORY=$(PS3_NATIVE_MEMORY) \
 		-DPS3_PGM_MASK_FILE_CACHE=$(PS3_PGM_MASK_FILE_CACHE) \
-            -DPS3_PGM_COLOR_FILE_CACHE=$(PS3_PGM_COLOR_FILE_CACHE)
+		-DPS3_PGM_PERF_PROFILE=$(PS3_PGM_PERF_PROFILE) \
+		-DPS3_PGM_SPU_WORKER=$(PS3_PGM_SPU_WORKER) \
+		-DPS3_PGM_COLOR_CACHE_2WAY=$(PS3_PGM_COLOR_CACHE_2WAY) \
+		-DPS3_PGM_COLOR_PREFETCH=$(PS3_PGM_COLOR_PREFETCH) \
+		-DPS3_PGM_COLOR_FILE_CACHE=$(PS3_PGM_COLOR_FILE_CACHE)
 	# Cell PPU release tuning; appended after generic rules below.
-	PS3_PERF_FLAGS := -O3 -maltivec -mabi=altivec -fstrict-aliasing \
+	PS3_PERF_FLAGS := -O3 -mcpu=cell -mtune=cell -maltivec -mabi=altivec -fstrict-aliasing \
 		-fomit-frame-pointer -ffast-math
 	ifeq ($(platform), psl1ght)
        PLATFORM_DEFINES += -D__PSL1GHT__ \
@@ -551,6 +560,18 @@ CXX_SYSTEM = g++
 include Makefile.common
 include $(INCLUDED_MAKEFILE)
 
+
+# PS3_PGM_SPU_WORKER_V1A
+ifeq ($(platform), psl1ght)
+PS3_PGM_SPU_DIR := $(FBNEO_BURN_DRIVERS_DIR)/pgm/spu
+PS3_PGM_SPU_HEADER := $(PS3_PGM_SPU_DIR)/generated/ps3_sprite_worker_spu_bin.h
+
+ifeq ($(PS3_PGM_SPU_WORKER), 1)
+SOURCES_CXX += $(FBNEO_BURN_DRIVERS_DIR)/pgm/ps3_sprite_worker.cpp
+SOURCES_CXX += $(FBNEO_BURN_DRIVERS_DIR)/pgm/ps3_sprite_color_shadow.cpp
+endif
+endif
+
 FBNEO_CXXOBJ := $(SOURCES_CXX:.cpp=.o)
 FBNEO_COBJ := $(SOURCES_C:.c=.o)
 FBNEO_SOBJ := $(SOURCES_S:.S=.o)
@@ -771,6 +792,21 @@ $(MAIN_FBNEO_DIR)/cpu/mips3/x64/mips3_x64.o: $(MAIN_FBNEO_DIR)/cpu/mips3/x64/mip
 
 $(MAIN_FBNEO_DIR)/cpu/mips3_intf.o: $(MAIN_FBNEO_DIR)/cpu/mips3_intf.cpp
 	$(CXX) -c $(OBJOUT) $@ $< $(CXXFLAGS) $(INCFLAGS) -DSKIP_STDIO_REDEFINES
+
+# PS3_PGM_SPU_WORKER_V1A_BUILD
+ifeq ($(platform), psl1ght)
+ifeq ($(PS3_PGM_SPU_WORKER), 1)
+
+$(FBNEO_BURN_DRIVERS_DIR)/pgm/ps3_sprite_worker.o: $(PS3_PGM_SPU_HEADER)
+
+# Changing this option requires rebuilding pgm_draw.o only.
+$(FBNEO_BURN_DRIVERS_DIR)/pgm/pgm_draw.o: CXXFLAGS += -DPS3_PGM_SPU_SHADOW_INTERVAL=$(PS3_PGM_SPU_SHADOW_INTERVAL)
+
+$(PS3_PGM_SPU_HEADER):
+	$(MAKE) --no-print-directory -C $(PS3_PGM_SPU_DIR)
+
+endif
+endif
 
 %.o: %.cpp
 	$(CXX) -c $(OBJOUT) $@ $< $(CXXFLAGS) $(INCFLAGS)

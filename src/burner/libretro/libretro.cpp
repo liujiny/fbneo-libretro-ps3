@@ -1508,6 +1508,9 @@ audio_batch_cb(pAudBuffer, nBurnSoundLen);
 		return;
 	}
 
+#if defined(__PS3__) && defined(PS3_PGM_PERF_PROFILE) && PS3_PGM_PERF_PROFILE
+	unsigned long long perf_frame_start = ps3_perf_now_us();
+#endif
 #ifndef FBNEO_DEBUG
 	// Setting RA's video or audio driver to null will disable video/audio bits,
 	// however that's a problem because i do batch run with video/audio disabled to detect asan issues 
@@ -1603,6 +1606,9 @@ audio_batch_cb(pAudBuffer, nBurnSoundLen);
 
 	ForceFrameStep();
 
+#if defined(__PS3__) && defined(PS3_PGM_PERF_PROFILE) && PS3_PGM_PERF_PROFILE
+	unsigned long long perf_audio_start = ps3_perf_now_us();
+#endif
 	if (bPresentAudio)
 	{
 		if (bLowPassFilterEnabled)
@@ -1618,6 +1624,10 @@ audio_batch_cb(pAudBuffer, nBurnSoundLen);
 		if (ps3_diag_frame_number < 5) ps3_mem_diag_frame_event("after audio callback", ps3_diag_frame_number, 0);
 #endif
 	}
+#if defined(__PS3__) && defined(PS3_PGM_PERF_PROFILE) && PS3_PGM_PERF_PROFILE
+	if (bPresentAudio)
+		ps3_perf_record_time(PS3_PERF_AUDIO, ps3_perf_now_us() - perf_audio_start);
+#endif
 
 	if (bVidImageNeedRealloc)
 	{
@@ -1634,7 +1644,13 @@ audio_batch_cb(pAudBuffer, nBurnSoundLen);
 		ps3_mem_diag_stage("before_video_cb");
 	}
 #endif
+	#if defined(__PS3__) && defined(PS3_PGM_PERF_PROFILE) && PS3_PGM_PERF_PROFILE
+	unsigned long long perf_video_start = ps3_perf_now_us();
+	#endif
 	video_cb(pBurnDraw, nGameWidth, nGameHeight, nBurnPitch);
+	#if defined(__PS3__) && defined(PS3_PGM_PERF_PROFILE) && PS3_PGM_PERF_PROFILE
+	ps3_perf_record_time(PS3_PERF_VIDEO, ps3_perf_now_us() - perf_video_start);
+	#endif
 #ifdef __PS3__
 	if (ps3_diag_frame_number < 5) {
 		ps3_mem_diag_frame_event("after video callback", ps3_diag_frame_number, 0);
@@ -1678,6 +1694,97 @@ audio_batch_cb(pAudBuffer, nBurnSoundLen);
 		ps3_mem_diag_stage("retro_run_exit");
 		ps3_mem_diag_frame_event("retro_run EXIT", ps3_diag_frame_number, 0);
 	}
+	pgm_ps3_color_cache_prefetch_drain();
+	#if defined(PS3_PGM_PERF_PROFILE) && PS3_PGM_PERF_PROFILE
+	ps3_perf_stats perf_stats;
+	ps3_perf_frame_sample(ps3_perf_now_us() - perf_frame_start, &perf_stats);
+	if (perf_stats.frames) {
+		unsigned long long io_us = perf_stats.mask.io_us + perf_stats.color.io_us;
+		unsigned long long avg_frame = perf_stats.frame_total_us / perf_stats.frames;
+		unsigned long long avg_io = io_us / perf_stats.frames;
+		unsigned long long avg_cpu = avg_frame > avg_io ? avg_frame - avg_io : 0;
+		bprintf(PRINT_IMPORTANT,
+			_T("[PS3 PGM PERF] frames=%llu spu_worker=%u avg_frame_us=%llu max_frame_us=%llu avg_frame_cpu_est_us=%llu sprite_draw_avg_us=%llu sprite_decode_avg_us=%llu sprite_raster_sampled_avg_us=%llu sprite_nozoom_avg_us=%llu sprite_zoom_avg_us=%llu sprite_nozoom_count=%llu sprite_zoom_count=%llu color_expand_sampled_avg_us=%llu color_spu_sampled_avg_us=%llu color_ppu_sampled_avg_us=%llu color_spu_samples=%llu color_ppu_samples=%llu sprites_avg_frame=%llu audio_post_avg_us=%llu video_cb_avg_us=%llu\n"),
+			perf_stats.frames, (unsigned)PS3_PGM_SPU_WORKER, avg_frame, perf_stats.frame_max_us, avg_cpu,
+			perf_stats.sprite_draw_us / perf_stats.frames,
+			perf_stats.sprite_decode_us / perf_stats.frames,
+			perf_stats.sprite_raster_sampled_us / perf_stats.frames,
+			perf_stats.sprite_nozoom_us / perf_stats.frames,
+			perf_stats.sprite_zoom_us / perf_stats.frames,
+			perf_stats.sprite_nozoom_count,
+			perf_stats.sprite_zoom_count,
+			perf_stats.color_expand_sampled_us / perf_stats.frames,
+			perf_stats.color_spu_sampled_us / perf_stats.frames,
+			perf_stats.color_ppu_sampled_us / perf_stats.frames,
+			perf_stats.color_spu_samples,
+			perf_stats.color_ppu_samples,
+			perf_stats.sprite_count_total / perf_stats.frames,
+			perf_stats.audio_us / perf_stats.frames,
+			perf_stats.video_us / perf_stats.frames);
+		#if defined(PS3_MEMORY_DIAGNOSTIC) && PS3_MEMORY_DIAGNOSTIC
+		ps3_mem_diag_logf("frames=%llu spu_worker=%u avg_frame_us=%llu max_frame_us=%llu avg_frame_cpu_est_us=%llu sprite_draw_avg_us=%llu sprite_decode_avg_us=%llu sprite_raster_sampled_avg_us=%llu sprite_nozoom_avg_us=%llu sprite_zoom_avg_us=%llu sprite_nozoom_count=%llu sprite_zoom_count=%llu color_expand_sampled_avg_us=%llu color_spu_sampled_avg_us=%llu color_ppu_sampled_avg_us=%llu color_spu_samples=%llu color_ppu_samples=%llu sprites_avg_frame=%llu audio_post_avg_us=%llu video_cb_avg_us=%llu\n",
+			perf_stats.frames, (unsigned)PS3_PGM_SPU_WORKER, avg_frame, perf_stats.frame_max_us, avg_cpu,
+			perf_stats.sprite_draw_us / perf_stats.frames,
+			perf_stats.sprite_decode_us / perf_stats.frames,
+			perf_stats.sprite_raster_sampled_us / perf_stats.frames,
+			perf_stats.sprite_nozoom_us / perf_stats.frames,
+			perf_stats.sprite_zoom_us / perf_stats.frames,
+			perf_stats.sprite_nozoom_count,
+			perf_stats.sprite_zoom_count,
+			perf_stats.color_expand_sampled_us / perf_stats.frames,
+			perf_stats.color_spu_sampled_us / perf_stats.frames,
+			perf_stats.color_ppu_sampled_us / perf_stats.frames,
+			perf_stats.color_spu_samples,
+			perf_stats.color_ppu_samples,
+			perf_stats.sprite_count_total / perf_stats.frames,
+			perf_stats.audio_us / perf_stats.frames,
+			perf_stats.video_us / perf_stats.frames);
+		#endif
+		bprintf(PRINT_IMPORTANT,
+			_T("[PS3 PGM PERF] mask hit=%llu miss=%llu seek=%llu read=%llu avg_read_bytes=%llu bytes=%llu io_wall_us=%llu repeat_page_reads=%llu adjacent_page_reads=%llu sequential_page_reads=%llu; color hit=%llu miss=%llu seek=%llu read=%llu avg_read_bytes=%llu bytes=%llu sync_io_wall_us=%llu async_io_wall_us=%llu repeat_page_reads=%llu adjacent_page_reads=%llu sequential_page_reads=%llu way0=%u way1=%u evict=%u conflict_replace=%u prefetch_issued=%u prefetch_hit=%u prefetch_wasted=%u prefetch_bytes=%u avoided_sync_reads=%u\n"),
+			(unsigned long long)perf_stats.mask.hits, (unsigned long long)perf_stats.mask.misses,
+			(unsigned long long)perf_stats.mask.seeks, (unsigned long long)perf_stats.mask.reads,
+			perf_stats.mask.reads ? perf_stats.mask.bytes_read / perf_stats.mask.reads : 0,
+			perf_stats.mask.bytes_read, perf_stats.mask.io_us,
+			(unsigned long long)perf_stats.mask.repeated_page_reads,
+			(unsigned long long)perf_stats.mask.adjacent_page_reads,
+			(unsigned long long)perf_stats.mask.sequential_page_reads,
+			(unsigned long long)perf_stats.color.hits, (unsigned long long)perf_stats.color.misses,
+			(unsigned long long)perf_stats.color.seeks, (unsigned long long)perf_stats.color.reads,
+			perf_stats.color.reads ? perf_stats.color.bytes_read / perf_stats.color.reads : 0,
+			perf_stats.color.bytes_read, perf_stats.color.io_us, perf_stats.color.async_io_us,
+			(unsigned long long)perf_stats.color.repeated_page_reads,
+			(unsigned long long)perf_stats.color.adjacent_page_reads,
+			(unsigned long long)perf_stats.color.sequential_page_reads,
+			perf_stats.color.way0_hits, perf_stats.color.way1_hits,
+			perf_stats.color.evictions, perf_stats.color.conflict_replacements,
+			perf_stats.prefetch_issued, perf_stats.prefetch_hits,
+			perf_stats.prefetch_wasted, perf_stats.prefetch_bytes,
+			perf_stats.avoided_sync_reads);
+		#if defined(PS3_MEMORY_DIAGNOSTIC) && PS3_MEMORY_DIAGNOSTIC
+		ps3_mem_diag_logf("mask hit=%llu miss=%llu seek=%llu read=%llu avg_read_bytes=%llu bytes=%llu io_wall_us=%llu repeat_page_reads=%llu adjacent_page_reads=%llu sequential_page_reads=%llu; color hit=%llu miss=%llu seek=%llu read=%llu avg_read_bytes=%llu bytes=%llu sync_io_wall_us=%llu async_io_wall_us=%llu repeat_page_reads=%llu adjacent_page_reads=%llu sequential_page_reads=%llu way0=%u way1=%u evict=%u conflict_replace=%u prefetch_issued=%u prefetch_hit=%u prefetch_wasted=%u prefetch_bytes=%u avoided_sync_reads=%u\n",
+			(unsigned long long)perf_stats.mask.hits, (unsigned long long)perf_stats.mask.misses,
+			(unsigned long long)perf_stats.mask.seeks, (unsigned long long)perf_stats.mask.reads,
+			perf_stats.mask.reads ? perf_stats.mask.bytes_read / perf_stats.mask.reads : 0,
+			perf_stats.mask.bytes_read, perf_stats.mask.io_us,
+			(unsigned long long)perf_stats.mask.repeated_page_reads,
+			(unsigned long long)perf_stats.mask.adjacent_page_reads,
+			(unsigned long long)perf_stats.mask.sequential_page_reads,
+			(unsigned long long)perf_stats.color.hits, (unsigned long long)perf_stats.color.misses,
+			(unsigned long long)perf_stats.color.seeks, (unsigned long long)perf_stats.color.reads,
+			perf_stats.color.reads ? perf_stats.color.bytes_read / perf_stats.color.reads : 0,
+			perf_stats.color.bytes_read, perf_stats.color.io_us, perf_stats.color.async_io_us,
+			(unsigned long long)perf_stats.color.repeated_page_reads,
+			(unsigned long long)perf_stats.color.adjacent_page_reads,
+			(unsigned long long)perf_stats.color.sequential_page_reads,
+			perf_stats.color.way0_hits, perf_stats.color.way1_hits,
+			perf_stats.color.evictions, perf_stats.color.conflict_replacements,
+			perf_stats.prefetch_issued, perf_stats.prefetch_hits,
+			perf_stats.prefetch_wasted, perf_stats.prefetch_bytes,
+			perf_stats.avoided_sync_reads);
+		#endif
+	}
+	#endif
 	ps3_diag_frame_number++;
 #endif
 }

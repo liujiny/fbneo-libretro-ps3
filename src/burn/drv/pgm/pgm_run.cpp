@@ -1,11 +1,20 @@
 
 #include "pgm.h"
+#include "ps3_sprite_worker.h"
+#if defined(__PS3__) && defined(PS3_PGM_SPU_WORKER) && PS3_PGM_SPU_WORKER
+#include "ps3_sprite_color_shadow.h"
+#endif
 #include "v3021.h"
 #include "ics2115.h"
 #include "timer.h"
 
 #ifdef __PS3__
 #include <stdio.h>
+#endif
+#if defined(__PSL1GHT__) && defined(PS3_PGM_COLOR_PREFETCH) && PS3_PGM_COLOR_PREFETCH
+#include <sys/thread.h>
+#include <sys/mutex.h>
+#include <sys/cond.h>
 #endif
 #ifdef __PS3__
 #include "../../ps3_memory_pool.h"
@@ -96,19 +105,33 @@ UINT8 *pgm_ps3_mask_cache_miss(UINT32 page)
     UINT8 *dst = PGMSPRMaskPageCache +
         (slot << PGM_PS3_MASK_PAGE_SHIFT);
     long file_offset = (long)(page << PGM_PS3_MASK_PAGE_SHIFT);
+    unsigned long long io_start = ps3_perf_now_us();
 
     g_ps3_mask_cache_misses++;
 
-    if (g_ps3_mask_cache_file == NULL ||
-        fseek(g_ps3_mask_cache_file, file_offset, SEEK_SET) != 0) {
+    if (g_ps3_mask_cache_file == NULL) {
         memset(dst, 0, PGM_PS3_MASK_PAGE_SIZE);
         g_ps3_mask_cache_errors++;
+        ps3_perf_record_cache_io(PS3_PERF_MASK_CACHE, 0, 0, 0,
+            ps3_perf_now_us() - io_start);
+        PGMSPRMaskPageTag[slot] = (INT32)page;
+        return dst;
+    }
+
+    if (fseek(g_ps3_mask_cache_file, file_offset, SEEK_SET) != 0) {
+        memset(dst, 0, PGM_PS3_MASK_PAGE_SIZE);
+        g_ps3_mask_cache_errors++;
+        ps3_perf_record_cache_io(PS3_PERF_MASK_CACHE, 1, 0, 0,
+            ps3_perf_now_us() - io_start);
         PGMSPRMaskPageTag[slot] = (INT32)page;
         return dst;
     }
 
     size_t got = fread(
         dst, 1, PGM_PS3_MASK_PAGE_SIZE, g_ps3_mask_cache_file);
+    ps3_perf_record_cache_io(PS3_PERF_MASK_CACHE, 1, 1, got,
+        ps3_perf_now_us() - io_start);
+    ps3_perf_record_cache_page(PS3_PERF_MASK_CACHE, page);
 
     if (got < PGM_PS3_MASK_PAGE_SIZE) {
         memset(dst + got, 0, PGM_PS3_MASK_PAGE_SIZE - got);
@@ -305,15 +328,227 @@ static void pgm_ps3_mask_cache_exit()
 
 UINT8 *PGMSPRColPageCache = NULL;
 INT32 PGMSPRColPageTag[PGM_PS3_COLOR_CACHE_PAGES];
+#if PS3_PGM_COLOR_CACHE_2WAY
+UINT8 PGMSPRColCacheVictim[PGM_PS3_COLOR_CACHE_PAGES / 2];
+#endif
 INT32 nPGMSPRColFileCacheActive = 0;
 
 static FILE *g_ps3_color_cache_file = NULL;
 static UINT32 g_ps3_color_cache_misses = 0;
 static UINT32 g_ps3_color_cache_errors = 0;
 
+#if defined(__PSL1GHT__) && defined(PS3_PGM_COLOR_PREFETCH) && PS3_PGM_COLOR_PREFETCH
+/* One worker request plus at most one completed page; never expands the 8 MiB cache. */
+enum { PGM_PREFETCH_FREE, PGM_PREFETCH_LOADING, PGM_PREFETCH_READY };
+static UINT8 g_ps3_color_prefetch_data[2][PGM_PS3_COLOR_PAGE_SIZE] __attribute__((aligned(128)));
+static INT32 g_ps3_color_prefetch_state[2];
+static UINT32 g_ps3_color_prefetch_page[2];
+static INT32 g_ps3_color_prefetch_cancel[2];
+static FILE *g_ps3_color_prefetch_file = NULL;
+static sys_ppu_thread_t g_ps3_color_prefetch_thread;
+static sys_mutex_t g_ps3_color_prefetch_mutex;
+static sys_cond_t g_ps3_color_prefetch_cond;
+static INT32 g_ps3_color_prefetch_started = 0;
+static INT32 g_ps3_color_prefetch_stop = 0;
+static INT32 g_ps3_color_prefetch_request = -1;
+static UINT32 g_ps3_color_prefetch_last_page;
+static INT32 g_ps3_color_prefetch_last_valid = 0;
+static UINT32 g_ps3_color_prefetch_seq = 0;
+static unsigned int g_ps3_color_prefetch_issued_pending, g_ps3_color_prefetch_hits_pending;
+static unsigned int g_ps3_color_prefetch_wasted_pending, g_ps3_color_prefetch_avoided_pending;
+static unsigned int g_ps3_color_prefetch_bytes_pending;
+static unsigned int g_ps3_color_prefetch_seeks_pending, g_ps3_color_prefetch_reads_pending;
+static unsigned long long g_ps3_color_prefetch_io_us_pending;
+static UINT32 g_ps3_color_prefetch_pages_pending[64];
+static unsigned int g_ps3_color_prefetch_page_count_pending;
+
+static void pgm_ps3_color_prefetch_worker(void *unused)
+{
+	(void)unused;
+	for (;;) {
+		sysMutexLock(g_ps3_color_prefetch_mutex, 0);
+		while (g_ps3_color_prefetch_request < 0 && !g_ps3_color_prefetch_stop) {
+			sysCondWait(g_ps3_color_prefetch_cond, 0);
+		}
+		if (g_ps3_color_prefetch_stop) {
+			sysMutexUnlock(g_ps3_color_prefetch_mutex);
+			break;
+		}
+		INT32 slot = g_ps3_color_prefetch_request;
+		g_ps3_color_prefetch_request = -1;
+		UINT32 page = g_ps3_color_prefetch_page[slot];
+		sysMutexUnlock(g_ps3_color_prefetch_mutex);
+
+		unsigned long long io_start = ps3_perf_now_us();
+		int seek_ok = fseek(g_ps3_color_prefetch_file,
+			(long)(page << PGM_PS3_COLOR_PAGE_SHIFT), SEEK_SET) == 0;
+		size_t got = seek_ok ? fread(g_ps3_color_prefetch_data[slot], 1,
+			PGM_PS3_COLOR_PAGE_SIZE, g_ps3_color_prefetch_file) : 0;
+		unsigned long long io_us = ps3_perf_now_us() - io_start;
+
+		sysMutexLock(g_ps3_color_prefetch_mutex, 0);
+		g_ps3_color_prefetch_seeks_pending += seek_ok ? 1 : 0;
+		g_ps3_color_prefetch_reads_pending += seek_ok ? 1 : 0;
+		g_ps3_color_prefetch_bytes_pending += (unsigned int)got;
+		g_ps3_color_prefetch_io_us_pending += io_us;
+		if (g_ps3_color_prefetch_page_count_pending < 64)
+			g_ps3_color_prefetch_pages_pending[g_ps3_color_prefetch_page_count_pending++] = page;
+		if (got < PGM_PS3_COLOR_PAGE_SIZE)
+			memset(g_ps3_color_prefetch_data[slot] + got, 0,
+				PGM_PS3_COLOR_PAGE_SIZE - got);
+		UINT32 page_offset = page << PGM_PS3_COLOR_PAGE_SHIFT;
+		size_t expected = page_offset < (UINT32)nPGMSPRColROMLen ?
+			((UINT32)nPGMSPRColROMLen - page_offset < PGM_PS3_COLOR_PAGE_SIZE ?
+			 (UINT32)nPGMSPRColROMLen - page_offset : PGM_PS3_COLOR_PAGE_SIZE) : 0;
+		if (g_ps3_color_prefetch_cancel[slot] || g_ps3_color_prefetch_stop ||
+			!seek_ok || got != expected) {
+			g_ps3_color_prefetch_wasted_pending++;
+			g_ps3_color_prefetch_state[slot] = PGM_PREFETCH_FREE;
+		} else {
+			g_ps3_color_prefetch_state[slot] = PGM_PREFETCH_READY;
+		}
+		sysMutexUnlock(g_ps3_color_prefetch_mutex);
+	}
+}
+
+static INT32 pgm_ps3_color_prefetch_start(void)
+{
+	sys_mutex_attr_t ma; sys_cond_attr_t ca;
+	sysMutexAttrInitialize(ma); sysCondAttrInitialize(ca);
+	if (sysMutexCreate(&g_ps3_color_prefetch_mutex, &ma) != 0) return 0;
+	if (sysCondCreate(&g_ps3_color_prefetch_cond, g_ps3_color_prefetch_mutex, &ca) != 0) {
+		sysMutexDestroy(g_ps3_color_prefetch_mutex); return 0;
+	}
+	g_ps3_color_prefetch_file = fopen(PS3_PGM_COLOR_CACHE_PATH, "rb");
+	if (!g_ps3_color_prefetch_file) {
+		sysCondDestroy(g_ps3_color_prefetch_cond); sysMutexDestroy(g_ps3_color_prefetch_mutex); return 0;
+	}
+	g_ps3_color_prefetch_stop = 0;
+	g_ps3_color_prefetch_request = -1;
+	memset(g_ps3_color_prefetch_state, 0, sizeof(g_ps3_color_prefetch_state));
+	if (sysThreadCreate(&g_ps3_color_prefetch_thread, pgm_ps3_color_prefetch_worker,
+		NULL, 1500, 32 * 1024, THREAD_JOINABLE, (char*)"pgm-color-io") != 0) {
+		fclose(g_ps3_color_prefetch_file); g_ps3_color_prefetch_file = NULL;
+		sysCondDestroy(g_ps3_color_prefetch_cond); sysMutexDestroy(g_ps3_color_prefetch_mutex); return 0;
+	}
+	g_ps3_color_prefetch_started = 1;
+	return 1;
+}
+
+static void pgm_ps3_color_prefetch_stop_worker(void)
+{
+	if (!g_ps3_color_prefetch_started) return;
+	sysMutexLock(g_ps3_color_prefetch_mutex, 0);
+	g_ps3_color_prefetch_stop = 1;
+	sysCondSignal(g_ps3_color_prefetch_cond);
+	sysMutexUnlock(g_ps3_color_prefetch_mutex);
+	u64 retval = 0; sysThreadJoin(g_ps3_color_prefetch_thread, &retval);
+	fclose(g_ps3_color_prefetch_file); g_ps3_color_prefetch_file = NULL;
+	sysCondDestroy(g_ps3_color_prefetch_cond); sysMutexDestroy(g_ps3_color_prefetch_mutex);
+	g_ps3_color_prefetch_started = 0;
+}
+#endif
+
+void pgm_ps3_color_cache_note_page(UINT32 page)
+{
+#if defined(__PSL1GHT__) && defined(PS3_PGM_COLOR_PREFETCH) && PS3_PGM_COLOR_PREFETCH
+	if (!g_ps3_color_prefetch_started) return;
+	if (sysMutexTryLock(g_ps3_color_prefetch_mutex) != 0) return;
+	if (g_ps3_color_prefetch_last_valid && page == g_ps3_color_prefetch_last_page + 1)
+		g_ps3_color_prefetch_seq++;
+	else {
+		g_ps3_color_prefetch_seq = 0;
+		for (INT32 i = 0; i < 2; i++) {
+			if (g_ps3_color_prefetch_state[i] == PGM_PREFETCH_READY) {
+				g_ps3_color_prefetch_state[i] = PGM_PREFETCH_FREE;
+				g_ps3_color_prefetch_wasted_pending++;
+			} else if (g_ps3_color_prefetch_state[i] == PGM_PREFETCH_LOADING &&
+				g_ps3_color_prefetch_request == i) {
+				g_ps3_color_prefetch_request = -1;
+				g_ps3_color_prefetch_state[i] = PGM_PREFETCH_FREE;
+				g_ps3_color_prefetch_wasted_pending++;
+			} else if (g_ps3_color_prefetch_state[i] == PGM_PREFETCH_LOADING)
+				g_ps3_color_prefetch_cancel[i] = 1;
+		}
+	}
+	g_ps3_color_prefetch_last_page = page;
+	g_ps3_color_prefetch_last_valid = 1;
+	if (g_ps3_color_prefetch_seq >= 2) {
+		UINT32 next = page + 1;
+		INT32 found = 0, resident = 0, free_slot = -1, loading = 0;
+#if PS3_PGM_COLOR_CACHE_2WAY
+		UINT32 next_set = next & ((PGM_PS3_COLOR_CACHE_PAGES / 2) - 1);
+		resident = PGMSPRColPageTag[next_set * 2] == (INT32)next ||
+			PGMSPRColPageTag[next_set * 2 + 1] == (INT32)next;
+#else
+		resident = PGMSPRColPageTag[next & PGM_PS3_COLOR_CACHE_MASK] == (INT32)next;
+#endif
+		for (INT32 i = 0; i < 2; i++) {
+			if (g_ps3_color_prefetch_state[i] != PGM_PREFETCH_FREE &&
+				g_ps3_color_prefetch_page[i] == next) found = 1;
+			if (g_ps3_color_prefetch_state[i] == PGM_PREFETCH_FREE) free_slot = i;
+			if (g_ps3_color_prefetch_state[i] == PGM_PREFETCH_LOADING) loading = 1;
+		}
+		if (!found && !resident && next < ((UINT32)nPGMSPRColROMLen + PGM_PS3_COLOR_PAGE_SIZE - 1) / PGM_PS3_COLOR_PAGE_SIZE &&
+			!loading && g_ps3_color_prefetch_request < 0 && free_slot >= 0) {
+			g_ps3_color_prefetch_page[free_slot] = next;
+			g_ps3_color_prefetch_cancel[free_slot] = 0;
+			g_ps3_color_prefetch_state[free_slot] = PGM_PREFETCH_LOADING;
+			g_ps3_color_prefetch_request = free_slot;
+			g_ps3_color_prefetch_issued_pending++;
+			sysCondSignal(g_ps3_color_prefetch_cond);
+		}
+	}
+	sysMutexUnlock(g_ps3_color_prefetch_mutex);
+#else
+	(void)page;
+#endif
+}
+
+#if defined(PS3_PGM_COLOR_PREFETCH) && PS3_PGM_COLOR_PREFETCH
+void pgm_ps3_color_cache_prefetch_drain(void)
+{
+#if defined(__PSL1GHT__) && defined(PS3_PGM_COLOR_PREFETCH) && PS3_PGM_COLOR_PREFETCH
+	if (!g_ps3_color_prefetch_started) return;
+	if (sysMutexTryLock(g_ps3_color_prefetch_mutex) != 0) return;
+	unsigned int issued = g_ps3_color_prefetch_issued_pending;
+	unsigned int hits = g_ps3_color_prefetch_hits_pending;
+	unsigned int wasted = g_ps3_color_prefetch_wasted_pending;
+	unsigned int avoided = g_ps3_color_prefetch_avoided_pending;
+	unsigned int bytes = g_ps3_color_prefetch_bytes_pending;
+	unsigned int seeks = g_ps3_color_prefetch_seeks_pending;
+	unsigned int reads = g_ps3_color_prefetch_reads_pending;
+	unsigned long long io_us = g_ps3_color_prefetch_io_us_pending;
+	unsigned int pages = g_ps3_color_prefetch_page_count_pending;
+	g_ps3_color_prefetch_issued_pending = g_ps3_color_prefetch_hits_pending = 0;
+	g_ps3_color_prefetch_wasted_pending = g_ps3_color_prefetch_avoided_pending = 0;
+	g_ps3_color_prefetch_bytes_pending = g_ps3_color_prefetch_seeks_pending = 0;
+	g_ps3_color_prefetch_reads_pending = g_ps3_color_prefetch_page_count_pending = 0;
+	g_ps3_color_prefetch_io_us_pending = 0;
+	UINT32 local_pages[64];
+	memcpy(local_pages, g_ps3_color_prefetch_pages_pending, pages * sizeof(UINT32));
+	sysMutexUnlock(g_ps3_color_prefetch_mutex);
+	#if defined(PS3_PGM_PERF_PROFILE) && PS3_PGM_PERF_PROFILE
+	ps3_perf_record_prefetch(issued, hits, wasted, bytes, avoided);
+	ps3_perf_record_prefetch_io(seeks, reads, bytes, io_us);
+	for (unsigned int i = 0; i < pages; i++) ps3_perf_record_cache_page(PS3_PERF_COLOR_CACHE, local_pages[i]);
+	#else
+	(void)issued; (void)hits; (void)wasted; (void)bytes; (void)avoided;
+	(void)seeks; (void)reads; (void)io_us; (void)local_pages; (void)pages;
+	#endif
+#endif
+}
+#endif
+
 UINT8 *pgm_ps3_color_cache_miss(UINT32 page)
 {
+#if PS3_PGM_COLOR_CACHE_2WAY
+    UINT32 set = page & ((PGM_PS3_COLOR_CACHE_PAGES / 2) - 1);
+    UINT32 way = PGMSPRColCacheVictim[set] & 1;
+    UINT32 slot = set * 2 + way;
+#else
     UINT32 slot = page & PGM_PS3_COLOR_CACHE_MASK;
+#endif
 
     UINT8 *dst =
         PGMSPRColPageCache +
@@ -321,14 +556,54 @@ UINT8 *pgm_ps3_color_cache_miss(UINT32 page)
 
     long file_offset =
         (long)(page << PGM_PS3_COLOR_PAGE_SHIFT);
+    unsigned long long io_start = ps3_perf_now_us();
 
     g_ps3_color_cache_misses++;
 
-    if (g_ps3_color_cache_file == NULL ||
-        fseek(g_ps3_color_cache_file, file_offset, SEEK_SET) != 0) {
+#if PS3_PGM_COLOR_CACHE_2WAY
+    if (PGMSPRColPageTag[slot] >= 0)
+        ps3_perf_record_color_eviction(1);
+    PGMSPRColCacheVictim[set] = (UINT8)(way ^ 1);
+#else
+    if (PGMSPRColPageTag[slot] >= 0)
+        ps3_perf_record_color_eviction(0);
+#endif
+
+#if defined(__PSL1GHT__) && defined(PS3_PGM_COLOR_PREFETCH) && PS3_PGM_COLOR_PREFETCH
+	/* Never wait for the worker: a ready page is copied only under a try-lock. */
+	if (g_ps3_color_prefetch_started &&
+		sysMutexTryLock(g_ps3_color_prefetch_mutex) == 0) {
+		for (INT32 i = 0; i < 2; i++) {
+			if (g_ps3_color_prefetch_state[i] == PGM_PREFETCH_READY &&
+				g_ps3_color_prefetch_page[i] == page) {
+				memcpy(dst, g_ps3_color_prefetch_data[i], PGM_PS3_COLOR_PAGE_SIZE);
+				g_ps3_color_prefetch_state[i] = PGM_PREFETCH_FREE;
+				g_ps3_color_prefetch_hits_pending++;
+				g_ps3_color_prefetch_avoided_pending++;
+				sysMutexUnlock(g_ps3_color_prefetch_mutex);
+				PGMSPRColPageTag[slot] = (INT32)page;
+				return dst;
+			}
+		}
+		sysMutexUnlock(g_ps3_color_prefetch_mutex);
+	}
+#endif
+
+    if (g_ps3_color_cache_file == NULL) {
 
         memset(dst, 0, PGM_PS3_COLOR_PAGE_SIZE);
         g_ps3_color_cache_errors++;
+        ps3_perf_record_cache_io(PS3_PERF_COLOR_CACHE, 0, 0, 0,
+            ps3_perf_now_us() - io_start);
+        PGMSPRColPageTag[slot] = (INT32)page;
+        return dst;
+    }
+
+    if (fseek(g_ps3_color_cache_file, file_offset, SEEK_SET) != 0) {
+        memset(dst, 0, PGM_PS3_COLOR_PAGE_SIZE);
+        g_ps3_color_cache_errors++;
+        ps3_perf_record_cache_io(PS3_PERF_COLOR_CACHE, 1, 0, 0,
+            ps3_perf_now_us() - io_start);
         PGMSPRColPageTag[slot] = (INT32)page;
         return dst;
     }
@@ -337,6 +612,9 @@ UINT8 *pgm_ps3_color_cache_miss(UINT32 page)
         fread(dst, 1,
               PGM_PS3_COLOR_PAGE_SIZE,
               g_ps3_color_cache_file);
+    ps3_perf_record_cache_io(PS3_PERF_COLOR_CACHE, 1, 1, got,
+        ps3_perf_now_us() - io_start);
+    ps3_perf_record_cache_page(PS3_PERF_COLOR_CACHE, page);
 
     if (got < PGM_PS3_COLOR_PAGE_SIZE) {
         memset(
@@ -500,18 +778,34 @@ static INT32 pgm_ps3_color_cache_build()
          i++) {
         PGMSPRColPageTag[i] = -1;
     }
+#if PS3_PGM_COLOR_CACHE_2WAY
+    memset(PGMSPRColCacheVictim, 0, sizeof(PGMSPRColCacheVictim));
+#endif
 
     g_ps3_color_cache_misses = 0;
     g_ps3_color_cache_errors = 0;
+#if defined(__PSL1GHT__) && defined(PS3_PGM_COLOR_PREFETCH) && PS3_PGM_COLOR_PREFETCH
+	g_ps3_color_prefetch_last_valid = 0;
+	g_ps3_color_prefetch_seq = 0;
+	if (!pgm_ps3_color_prefetch_start())
+		bprintf(PRINT_IMPORTANT, _T("[FBNeo] PS3 color cache: async read-ahead unavailable; using synchronous reads\n"));
+#endif
     nPGMSPRColFileCacheActive = 1;
 
     bprintf(
         PRINT_IMPORTANT,
-        _T("[FBNeo] PS3 PGM color file cache enabled: backing=%d cache=%u page=%u slots=%u saved=%u\n"),
+        _T("[FBNeo] PS3 PGM color file cache enabled: backing=%d cache=%u page=%u slots=%u sets=%u ways=%u saved=%u\n"),
         nPGMSPRColROMLen,
         (unsigned)cache_bytes,
         (unsigned)PGM_PS3_COLOR_PAGE_SIZE,
         (unsigned)PGM_PS3_COLOR_CACHE_PAGES,
+#if PS3_PGM_COLOR_CACHE_2WAY
+        (unsigned)(PGM_PS3_COLOR_CACHE_PAGES / 2),
+        2u,
+#else
+        (unsigned)PGM_PS3_COLOR_CACHE_PAGES,
+        1u,
+#endif
         (unsigned)(nPGMSPRColROMLen -
                    cache_bytes));
 
@@ -521,6 +815,9 @@ static INT32 pgm_ps3_color_cache_build()
 
 static void pgm_ps3_color_cache_exit()
 {
+#if defined(__PSL1GHT__) && defined(PS3_PGM_COLOR_PREFETCH) && PS3_PGM_COLOR_PREFETCH
+	pgm_ps3_color_prefetch_stop_worker();
+#endif
     if (nPGMSPRColFileCacheActive) {
         bprintf(
             PRINT_IMPORTANT,
@@ -1547,6 +1844,32 @@ INT32 pgmInit()
 	bprintf(PRINT_IMPORTANT, _T("[FBNeo] PGM stage: Z80 ready, initializing draw/audio\n"));
 	pgmInitDraw();
 
+#if defined(__PS3__) && \
+    defined(__PSL1GHT__) && \
+    defined(PS3_PGM_SPU_WORKER) && \
+    PS3_PGM_SPU_WORKER
+	/* PS3_PGM_SPU_WORKER_V1A_INIT */
+	{
+
+	        INT32 spu_ret = ps3_pgm_spu_worker_init();
+
+
+	        bprintf(PRINT_IMPORTANT,
+
+	                _T("[PS3 PGM PERF] SPU worker init return=%d\\n"),
+
+	                spu_ret);
+
+
+	        if (spu_ret == 0) {
+
+	                ps3_pgm_color_shadow_init();
+
+	        }
+
+	}
+#endif
+
 	v3021Init();
 	ics2115_init(ics2115_sound_irq, ICSSNDROM, nPGMSNDROMLen);
 #ifdef __PS3__
@@ -1592,6 +1915,15 @@ INT32 pgmInit()
 
 INT32 pgmExit()
 {
+	#if defined(__PS3__) && \
+    defined(__PSL1GHT__) && \
+    defined(PS3_PGM_SPU_WORKER) && \
+    PS3_PGM_SPU_WORKER
+	/* PS3_PGM_SPU_WORKER_V1A_EXIT */
+	ps3_pgm_color_shadow_exit();
+	ps3_pgm_spu_worker_shutdown();
+#endif
+
 	pgmExitDraw();
 
 #ifdef __PS3__
