@@ -14,7 +14,9 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__PSL1GHT__)
 #include <malloc.h>
+#endif
 
 #if defined(PS3_PGM_PERF_PROFILE) && PS3_PGM_PERF_PROFILE
 ps3_perf_stats g_ps3_perf_stats;

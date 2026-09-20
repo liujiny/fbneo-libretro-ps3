@@ -1,3 +1,5 @@
+#if defined(__PS3__) && defined(PS3_PGM_SPU_WORKER) && PS3_PGM_SPU_WORKER
+
 #include <stdint.h>
 #include <string.h>
 
@@ -954,3 +956,5 @@ void ps3_pgm_spu_worker_shutdown(void)
         (unsigned)status);
 #endif
 }
+
+#endif
