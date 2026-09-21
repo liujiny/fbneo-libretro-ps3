@@ -1,5 +1,10 @@
 # PS3 / PSL1GHT 构建手册
 
+> 2026-09-21：本文下方保留历史 Windows 构建记录；当前 Cell SDK +
+> RetroArch 1.10.3 test2 的部署路径、内存池状态和对应版本请先看
+> [test2 检查点](docs/PS3_RA1103_TEST2_20260921.md)。
+> 不要将下方历史 ARCD00001 路径和 64 MB 池配置套用于本次 SSNE10001 包。
+
 本手册记录本项目在 Windows + PS3 SDK 4.75 环境中的已验证构建流程。它面向 FBNeo、MAME 2003-Plus 和统一版 RetroArch PS3。
 
 ## 1. 前置条件
@@ -166,4 +171,3 @@ GitHub 普通仓库拒绝超过 100 MB 的单文件；静态库、ELF、SELF 应
 7. FTP 覆盖 PS3 的正确文件。
 8. 用日志确认启动、加载游戏、Close Content、History 重载。
 ```
-

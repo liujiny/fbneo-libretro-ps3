@@ -1,4 +1,12 @@
 # FinalBurn Neo
+
+## PS3 Cell SDK / RetroArch 1.10.3 test2 检查点（非最终版）
+
+本分支保存与 RetroArch 1.10.3 test2 配套的 FBNeo 源码。
+版本对应关系、文件校验和 RPCS3 内存测试见
+[test2 检查点记录](docs/PS3_RA1103_TEST2_20260921.md)。
+本次未改动模拟核心代码，不替代已冻结稳定版。
+
 Official Forum: https://neo-source.com
 
 Discord: https://discord.gg/8EGVd9v
