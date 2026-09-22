@@ -90,6 +90,7 @@ static INT32 nPGMSNDROMAllocLen = 0;
 #endif
 
 #define PS3_PGM_MASK_CACHE_PATH "/dev_hdd0/tmp/fbneo-pgm-mask.cache"
+#include "ps3_pgm_cache_option.h"
 
 UINT8 *PGMSPRMaskPageCache = NULL;
 INT32 PGMSPRMaskPageTag[PGM_PS3_MASK_CACHE_PAGES];
@@ -188,6 +189,12 @@ static INT32 pgm_ps3_mask_cache_build()
 #if !PS3_PGM_MASK_FILE_CACHE
     return 0;
 #else
+#ifdef __LIBRETRO__
+    if (!ps3_pgm_hdd_cache_requested) {
+        bprintf(PRINT_IMPORTANT, _T("[FBNeo] PS3 PGM mask HDD cache OFF: keeping ROM in RAM\n"));
+        return 0;
+    }
+#endif
     /*
      * Generic PS3 PGM sprite-mask cache.
      * Only sufficiently large power-of-two mask images are paged.
@@ -686,6 +693,12 @@ static INT32 pgm_ps3_color_cache_build()
 #if !PS3_PGM_COLOR_FILE_CACHE
     return 0;
 #else
+#ifdef __LIBRETRO__
+    if (!ps3_pgm_hdd_cache_requested) {
+        bprintf(PRINT_IMPORTANT, _T("[FBNeo] PS3 PGM color HDD cache OFF: keeping ROM in RAM\n"));
+        return 0;
+    }
+#endif
     /*
      * Generic PS3 PGM packed sprite-color cache.
      * Any unpacked-color path remains resident.

@@ -1,5 +1,23 @@
 #include "retro_common.h"
 #include "retro_input.h"
+#include "ps3_pgm_cache_option.h"
+#ifdef __PS3__
+bool ps3_pgm_hdd_cache_requested = false;
+static struct retro_core_option_v2_definition var_fbneo_ps3_pgm_hdd_cache = {
+	"fbneo-ps3-pgm-hdd-cache",
+	"PS3 PGM HDD Cache (Reload Game)",
+	NULL,
+	"Disabled: keep PGM sprite data in RAM for faster access. Enabled: use /dev_hdd0/tmp to reduce RAM use, but disk reads may cause slowdown. Close and reload content after changing. Does not affect Neo Geo games or save states.",
+	NULL,
+	NULL,
+	{
+		{ "disabled", "Off (Use RAM)" },
+		{ "enabled", "On (Save RAM)" },
+		{ NULL, NULL },
+	},
+	"disabled"
+};
+#endif
 #ifdef BUILD_PGM2
 #include "retro_pgm2_cards.h"
 #endif
@@ -949,6 +967,9 @@ void set_environment()
 	struct retro_vfs_interface_info vfs_iface_info;
 
 	// Add the uncategorized core options
+#ifdef __PS3__
+	vars_systems.push_back(&var_fbneo_ps3_pgm_hdd_cache);
+#endif
 	var_fbneo_allow_patched_romsets.desc                   = RETRO_PATCHED_CAT_DESC;
 	var_fbneo_allow_patched_romsets.info                   = RETRO_PATCHED_CAT_INFO;
 	vars_systems.push_back(&var_fbneo_allow_patched_romsets);
@@ -1583,6 +1604,14 @@ static int percent_parser(const char *value)
 void check_variables(void)
 {
 	struct retro_variable var = {0};
+
+#ifdef __PS3__
+	var.key = var_fbneo_ps3_pgm_hdd_cache.key;
+	var.value = NULL;
+	ps3_pgm_hdd_cache_requested =
+		environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value &&
+		strcmp(var.value, "enabled") == 0;
+#endif
 
 	var.key = var_fbneo_cpu_speed_adjust.key;
 	if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
