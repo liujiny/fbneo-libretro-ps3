@@ -4,6 +4,9 @@
 
 #include "burnint.h"
 #include "serflash.h"
+#ifdef __PS3__
+#include "ps3_memory_pool.h"
+#endif
 
 
 // runtime state
@@ -14,19 +17,100 @@ static UINT8* m_region;
 static UINT16 m_flash_page_size;
 #ifdef __PS3__
 static FILE *m_region_file;
+
+#define CV1K_CACHE_WAYS 2
+#define CV1K_CACHE_SETS 1024
+#define CV1K_CACHE_TOTAL (CV1K_CACHE_SETS * CV1K_CACHE_WAYS) // 2048 pages = ~4.2 MiB
+
+static UINT8 *cv1k_cache_data = NULL;
+static UINT32 cv1k_cache_tags[CV1K_CACHE_TOTAL];
+static UINT8  cv1k_cache_lru[CV1K_CACHE_SETS];
+
+static void cv1k_cache_init()
+{
+	if (!cv1k_cache_data) {
+		cv1k_cache_data = (UINT8*)BurnMalloc(CV1K_CACHE_TOTAL * m_flash_page_size);
+	}
+	if (cv1k_cache_data) {
+		memset(cv1k_cache_tags, 0xFF, sizeof(cv1k_cache_tags));
+		memset(cv1k_cache_lru, 0, sizeof(cv1k_cache_lru));
+	}
+}
+
+static void cv1k_cache_free()
+{
+	if (cv1k_cache_data) {
+		BurnFree(cv1k_cache_data);
+		cv1k_cache_data = NULL;
+	}
+}
+
 static INT32 flash_page_read(UINT32 row, UINT8 *dst, INT32 len)
 {
 	if (m_region_file) {
+		if (cv1k_cache_data) {
+			static UINT32 s_flash_reads = 0;
+			static UINT32 s_flash_misses = 0;
+			s_flash_reads++;
+			if (s_flash_reads <= 10 || (s_flash_reads % 500) == 0) {
+				ps3_mem_diag_print("[SERFLASH] reads=%u misses=%u last_row=%u\n", s_flash_reads, s_flash_misses, row);
+			}
+			UINT32 set = row & (CV1K_CACHE_SETS - 1);
+			UINT32 idx0 = (set << 1);
+			UINT32 idx1 = idx0 + 1;
+
+			if (cv1k_cache_tags[idx0] == row) {
+				cv1k_cache_lru[set] = 1;
+				memcpy(dst, cv1k_cache_data + (idx0 * m_flash_page_size), len);
+				return 0;
+			}
+			if (cv1k_cache_tags[idx1] == row) {
+				cv1k_cache_lru[set] = 0;
+				memcpy(dst, cv1k_cache_data + (idx1 * m_flash_page_size), len);
+				return 0;
+			}
+
+			s_flash_misses++;
+			UINT32 victim_idx = cv1k_cache_lru[set] ? idx1 : idx0;
+			if (fseek(m_region_file, (long)(row * m_flash_page_size), SEEK_SET)) {
+				ps3_mem_diag_print("[SERFLASH ERROR] fseek failed row=%u\n", row);
+				return 1;
+			}
+			if (fread(cv1k_cache_data + (victim_idx * m_flash_page_size), 1, m_flash_page_size, m_region_file) != m_flash_page_size) {
+				ps3_mem_diag_print("[SERFLASH ERROR] fread failed row=%u\n", row);
+				return 1;
+			}
+
+			cv1k_cache_tags[victim_idx] = row;
+			cv1k_cache_lru[set] = (victim_idx == idx0) ? 1 : 0;
+			memcpy(dst, cv1k_cache_data + (victim_idx * m_flash_page_size), len);
+			return 0;
+		}
+
 		if (fseek(m_region_file, (long)(row * m_flash_page_size), SEEK_SET)) return 1;
 		return fread(dst, 1, len, m_region_file) == (size_t)len ? 0 : 1;
 	}
 	memcpy(dst, m_region + row * m_flash_page_size, len);
 	return 0;
 }
+
 static void flash_page_write(UINT32 row, const UINT8 *src, INT32 len)
 {
 	if (m_region_file) {
-		if (!fseek(m_region_file, (long)(row * m_flash_page_size), SEEK_SET)) { fwrite(src, 1, len, m_region_file); fflush(m_region_file); }
+		if (cv1k_cache_data) {
+			UINT32 set = row & (CV1K_CACHE_SETS - 1);
+			UINT32 idx0 = (set << 1);
+			UINT32 idx1 = idx0 + 1;
+			if (cv1k_cache_tags[idx0] == row) {
+				memcpy(cv1k_cache_data + (idx0 * m_flash_page_size), src, len);
+			} else if (cv1k_cache_tags[idx1] == row) {
+				memcpy(cv1k_cache_data + (idx1 * m_flash_page_size), src, len);
+			}
+		}
+		if (!fseek(m_region_file, (long)(row * m_flash_page_size), SEEK_SET)) {
+			fwrite(src, 1, len, m_region_file);
+			fflush(m_region_file);
+		}
 	} else memcpy(m_region + row * m_flash_page_size, src, len);
 }
 #endif
@@ -122,6 +206,7 @@ INT32 serflash_init_file(const char *path, INT32 length)
 #endif
 	if (!m_region_file) return 1;
 	serflash_init(NULL, length);
+	cv1k_cache_init();
 	return 0;
 }
 #endif
@@ -131,6 +216,7 @@ void serflash_exit()
 	BurnFree(m_flashwritemap);
 	BurnFree(m_flash_page_data);
 #ifdef __PS3__
+	cv1k_cache_free();
 	if (m_region_file) fclose(m_region_file);
 	m_region_file = NULL;
 #endif

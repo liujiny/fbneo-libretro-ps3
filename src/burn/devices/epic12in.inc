@@ -2,7 +2,11 @@
 
 static const void FUNCNAME(BLIT_PARAMS)
 {
+#ifdef __PS3__
+	UINT16* gfx2;
+#else
 	UINT32* gfx2;
+#endif
 	int y, yf;
 
 #if REALLY_SIMPLE == 0
@@ -38,7 +42,11 @@ static const void FUNCNAME(BLIT_PARAMS)
 #else
 	UINT32 pen;
 #endif
+#ifdef __PS3__
+	UINT16 *bmp;
+#else
 	UINT32 *bmp;
+#endif
 
 #if FLIPX == 1
 	src_x += (dimx-1);
@@ -118,10 +126,17 @@ static const void FUNCNAME(BLIT_PARAMS)
 	for (y = starty; y < dimy; y++)
 	{
 		//bmp = &bitmap->pix(dst_y_start + y, dst_x_start+startx);
+#ifdef __PS3__
+		bmp = epic12_get_write_row(dst_y_start + y);
+		if (!bmp) continue;
+		bmp += dst_x_start + startx;
+		gfx2 = epic12_get_read_row((src_y + yf * y) & 0x0fff);
+#else
 		bmp = m_bitmaps + (dst_y_start + y) * 0x2000 + (dst_x_start+startx);
 
 		const int ysrc_index =  ((src_y + yf * y) & 0x0fff) * 0x2000;
 		gfx2 = gfx + ysrc_index;
+#endif
 
 		#if FLIPX == 1
 			gfx2 += (src_x-startx);
@@ -130,7 +145,11 @@ static const void FUNCNAME(BLIT_PARAMS)
 		#endif
 
 #if 1
+#ifdef __PS3__
+		const UINT16* end = bmp+(dimx-startx);
+#else
 		const UINT32* end = bmp+(dimx-startx);
+#endif
 #else
 		// maybe we can do some SSE type optimizations on larger blocks? right now this just results in more code and slower compiling tho.
 

@@ -54,3 +54,37 @@ src/burner/libretro/pgmspritecreate
 *.failed-native-api
 commands-*.nm
 commands-*.diff
+
+# Temporary and backup files
+*.bak*
+*.corrupt*
+*.orig
+*~
+
+# Archives and binaries
+*.self
+*.SELF
+*.bin
+*.BIN
+*.pkg
+*.PKG
+*.zip
+*.tar.gz
+
+# SDK and staging directories
+.cellsdk*/
+CellSDK*/
+PS3SDK*/
+failed-builds/
+pkg_extract/
+ps3_dualcore_pkg_*/
+tools/ps3_pool_host_test/
+
+# Build and ROM directories
+build-*/
+packages/
+roms/
+bin_bench*
+__pycache__/
+*.pyc
+tools/pad_remote

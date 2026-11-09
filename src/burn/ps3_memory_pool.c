@@ -1,14 +1,16 @@
 #include "ps3_memory_pool.h"
 
 #ifndef PS3_FBNEO_VERBOSE_DIAGNOSTICS
-#define PS3_FBNEO_VERBOSE_DIAGNOSTICS 0
+#define PS3_FBNEO_VERBOSE_DIAGNOSTICS 1
 #endif
 
 #if defined(__PS3__)
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__PSL1GHT__)
 #include <malloc.h>
+#endif
 
 #if defined(__PSL1GHT__)
 #include <ppu-types.h>
@@ -106,6 +108,7 @@ static size_t g_system_live, g_system_peak, g_largest_system_fallback;
 static size_t g_tracked_live_peak;
 static size_t g_pool_success_count, g_pool_success_bytes;
 static size_t g_system_fallback_count, g_system_fallback_bytes;
+static size_t g_system_free_count, g_system_free_bytes;
 static size_t g_allocation_failure_count, g_allocation_failure_bytes;
 static const char *g_next_allocation_label;
 static const char *g_next_allocation_file;
@@ -237,6 +240,114 @@ static void diag_sample_bytes(const void *data, size_t size, size_t *nonzero, un
 	}
 }
 
+#if defined(PS3_MEMORY_DIAGNOSTIC) && PS3_MEMORY_DIAGNOSTIC
+/* Unattended testing aid: when /dev_hdd0/tmp/fbneo_dump_frames.txt contains a
+ * comma separated list of frame numbers, those frames are written as 24-bit
+ * BMPs so a run can be verified without looking at the TV. */
+static void ps3_dump_frame_bmp(const char *path, const void *data,
+		unsigned width, unsigned height, size_t pitch)
+{
+	FILE *f;
+	unsigned y;
+	unsigned row;
+	unsigned datasize;
+	unsigned char hdr[54];
+
+	if (!data || !width || !height)
+		return;
+	f = fopen(path, "wb");
+	if (!f)
+		return;
+
+	row      = (width * 3u + 3u) & ~3u;
+	datasize = row * height;
+	memset(hdr, 0, sizeof(hdr));
+	hdr[0] = 'B'; hdr[1] = 'M';
+	hdr[2] = (unsigned char)((54u + datasize) & 0xff);
+	hdr[3] = (unsigned char)(((54u + datasize) >> 8) & 0xff);
+	hdr[4] = (unsigned char)(((54u + datasize) >> 16) & 0xff);
+	hdr[5] = (unsigned char)(((54u + datasize) >> 24) & 0xff);
+	hdr[10] = 54;
+	hdr[14] = 40;
+	hdr[18] = (unsigned char)(width & 0xff);
+	hdr[19] = (unsigned char)((width >> 8) & 0xff);
+	hdr[22] = (unsigned char)(height & 0xff);
+	hdr[23] = (unsigned char)((height >> 8) & 0xff);
+	hdr[26] = 1;
+	hdr[28] = 24;
+	hdr[34] = (unsigned char)(datasize & 0xff);
+	hdr[35] = (unsigned char)((datasize >> 8) & 0xff);
+	hdr[38] = (unsigned char)((datasize >> 16) & 0xff);
+	fwrite(hdr, 1, sizeof(hdr), f);
+
+	for (y = height; y-- > 0; )
+	{
+		const uint16_t *src = (const uint16_t *)((const uint8_t *)data + (size_t)y * pitch);
+		unsigned x;
+		for (x = 0; x < width; x++)
+		{
+			uint16_t px = src[x];
+			unsigned char bgr[3];
+			bgr[0] = (unsigned char)((px & 0x1fu) << 3);            /* blue  */
+			bgr[1] = (unsigned char)(((px >> 5) & 0x3fu) << 2);     /* green */
+			bgr[2] = (unsigned char)(((px >> 11) & 0x1fu) << 3);    /* red   */
+			fwrite(bgr, 1, 3, f);
+		}
+		for (x = (unsigned)(width * 3u); x < row; x++)
+			fputc(0, f);
+	}
+	fclose(f);
+}
+
+void ps3_mem_diag_dump_video_frame(const void *data, unsigned width,
+		unsigned height, size_t pitch, unsigned frame_number)
+{
+	static unsigned counter;
+	static unsigned dump_at[8];
+	static int      n_dump = -1;
+	static unsigned next_dump;
+
+	if (n_dump < 0)
+	{
+		FILE *cfg;
+		n_dump = 0;
+		cfg = fopen("/dev_hdd0/tmp/fbneo_dump_frames.txt", "r");
+		if (cfg)
+		{
+			char buf[256];
+			if (fgets(buf, sizeof(buf), cfg))
+			{
+				char *p = buf;
+				while (*p && n_dump < 8)
+				{
+					while (*p && (*p < '0' || *p > '9')) p++;
+					if (!*p) break;
+					dump_at[n_dump++] = (unsigned)strtoul(p, &p, 10);
+				}
+			}
+			fclose(cfg);
+			if (n_dump > 0)
+				DIAG_PRINT("[PS3 FRAME DUMP] enabled frames=%d first=%u\n", n_dump, dump_at[0]);
+		}
+	}
+
+	if (n_dump > 0)
+	{
+		while (next_dump < (unsigned)n_dump && frame_number > dump_at[next_dump])
+			next_dump++;
+		if (next_dump < (unsigned)n_dump && frame_number == dump_at[next_dump])
+		{
+			char path[128];
+			snprintf(path, sizeof(path), "/dev_hdd0/tmp/fbneo_frame_%u.bmp", frame_number);
+			ps3_dump_frame_bmp(path, data, width, height, pitch);
+			DIAG_PRINT("[PS3 FRAME DUMP] frame=%u path=%s\n", frame_number, path);
+			next_dump++;
+		}
+	}
+	(void)counter;
+}
+#endif
+
 void ps3_mem_diag_video(const void *data, unsigned width, unsigned height, size_t pitch)
 {
 #if PS3_FBNEO_VERBOSE_DIAGNOSTICS
@@ -306,6 +417,7 @@ void ps3_mem_diag_reset(void)
 	g_tracked_live_peak = 0;
 	g_pool_success_count = g_pool_success_bytes = 0;
 	g_system_fallback_count = g_system_fallback_bytes = 0;
+	g_system_free_count = g_system_free_bytes = 0;
 	g_allocation_failure_count = g_allocation_failure_bytes = 0;
 	g_native_live = g_native_peak = g_native_count = g_native_bytes = 0;
 	g_native_failure_count = g_native_failure_bytes = 0;
@@ -412,6 +524,9 @@ void ps3_mem_diag_summary(const char *reason)
 		reason ? reason : "unknown", (unsigned long)g_native_live, (unsigned long)g_native_peak,
 		(unsigned long)g_native_count, (unsigned long)g_native_bytes,
 		(unsigned long)g_native_failure_count, (unsigned long)g_native_failure_bytes);
+	DIAG_PRINT("[PS3 MEM SUMMARY] reason=%s system_free_count=%lu system_free_bytes=%lu\n",
+		reason ? reason : "unknown", (unsigned long)g_system_free_count,
+		(unsigned long)g_system_free_bytes);
 	diag_live_top20();
 	diag_native_user_memory(reason);
 }
@@ -658,7 +773,9 @@ void *pool_malloc_tagged(size_t size, size_t requested_size)
 void pool_free(void *ptr)
 {
 	pool_block *block;
+#if PS3_NATIVE_MEMORY
 	int i;
+#endif
 	if (ptr == NULL) return;
 #if PS3_NATIVE_MEMORY
 	for (i = 0; i < NATIVE_ALLOCATION_MAX; i++) {
@@ -679,11 +796,16 @@ void pool_free(void *ptr)
 			return;
 		}
 	}
-#else
+#endif
+	/* Fallback blocks (libc memalign) and aligned pool blocks both keep a
+	 * pool_block header right before the payload. This path must run for them
+	 * regardless of PS3_NATIVE_MEMORY, or every non-native block leaks. */
 	block = (pool_block *)((uint8_t *)ptr - sizeof(pool_block));
 	if (block->magic == FALLBACK_MAGIC) {
 		diag_live_remove(ptr);
 		DIAG_STAT(if (g_system_live >= block->size) g_system_live -= block->size);
+		DIAG_STAT(g_system_free_count++);
+		DIAG_STAT(g_system_free_bytes += block->size);
 		free(block->allocation);
 		return;
 	}
@@ -704,6 +826,37 @@ void pool_free(void *ptr)
 		prev->next = block->next;
 		if (prev->next != NULL) prev->next->prev = prev;
 	}
+}
+
+void ps3_mem_diag_print(const char *format, ...)
+{
+#if defined(PS3_MEMORY_DIAGNOSTIC) && PS3_MEMORY_DIAGNOSTIC
+	va_list args;
+	FILE *output = g_diag_file ? g_diag_file : stderr;
+	va_start(args, format);
+	vfprintf(output, format, args);
+	va_end(args);
+	fflush(output);
+#else
+	(void)format;
+#endif
+}
+
+void ps3_mem_get_stats(ps3_memory_stats_t *out)
+{
+	if (!out) return;
+	memset(out, 0, sizeof(*out));
+	out->pool_total = POOL_SIZE;
+	out->pool_used = g_pool_used;
+	out->pool_peak = g_pool_peak;
+#if defined(PS3_MEMORY_DIAGNOSTIC) && PS3_MEMORY_DIAGNOSTIC
+	out->system_live = g_system_live;
+	out->system_peak = g_system_peak;
+	out->native_live = g_native_live;
+	out->native_peak = g_native_peak;
+	out->tracked_live_peak = g_tracked_live_peak;
+	out->fallback_count = g_system_fallback_count;
+	out->allocation_failure_count = g_allocation_failure_count;
 #endif
 }
 #endif

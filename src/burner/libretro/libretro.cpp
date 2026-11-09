@@ -8,6 +8,7 @@
 #include "burnint.h"
 #if defined(__PS3__)
 #include "ps3_memory_pool.h"
+#include "ps3_benchmark.h"
 static bool ps3_mem_first_frame_pending;
 static unsigned ps3_diag_frame_number;
 static INT32 ps3_diag_last_burn_frame_ret;
@@ -1484,7 +1485,14 @@ static void VideoBufferInit()
 
 void retro_run()
 {
+#if defined(__PS3__)
+	ps3_bench_phase_begin(4); /* whole retro_run, to separate frontend cost */
+#endif
 #ifdef __PS3__
+	ps3_benchmark_frame_before(ps3_diag_frame_number);
+	if (ps3_diag_frame_number < 10 || (ps3_diag_frame_number % 60) == 0) {
+		ps3_mem_diag_print("[RETRO_RUN] frame=%u ENTER\n", ps3_diag_frame_number);
+	}
 	if (ps3_diag_frame_number < 3) {
 		if (ps3_diag_frame_number == 0) ps3_mem_diag_probe_enabled();
 		ps3_mem_diag_life("retro_run ENTER");
@@ -1551,6 +1559,9 @@ audio_batch_cb(pAudBuffer, nBurnSoundLen);
 	bool bSkipFrame = false;
 
 	InputMake();
+#ifdef __PS3__
+	ps3_benchmark_input_step(ps3_diag_frame_number);
+#endif
 
 	// Check whether current frame should be skipped
 	if ((nFrameskipType > 1) && retro_audio_buff_active)
@@ -1634,6 +1645,8 @@ audio_batch_cb(pAudBuffer, nBurnSoundLen);
 		ps3_mem_diag_stage("before_video_cb");
 	}
 #endif
+	ps3_mem_diag_dump_video_frame(pBurnDraw, nGameWidth, nGameHeight, nBurnPitch, ps3_diag_frame_number);
+	ps3_benchmark_note_image(ps3_diag_frame_number, pBurnDraw, nGameWidth, nGameHeight, nBurnPitch);
 	video_cb(pBurnDraw, nGameWidth, nGameHeight, nBurnPitch);
 #ifdef __PS3__
 	if (ps3_diag_frame_number < 5) {
@@ -1678,6 +1691,14 @@ audio_batch_cb(pAudBuffer, nBurnSoundLen);
 		ps3_mem_diag_stage("retro_run_exit");
 		ps3_mem_diag_frame_event("retro_run EXIT", ps3_diag_frame_number, 0);
 	}
+	ps3_benchmark_frame_after(ps3_diag_frame_number);
+	if (ps3_benchmark_check_exit(ps3_diag_frame_number)) {
+#if defined(__PS3__)
+		ps3_bench_phase_end(4);
+#endif
+		return;
+	}
+	ps3_bench_phase_end(4);
 	ps3_diag_frame_number++;
 #endif
 }
@@ -2450,6 +2471,9 @@ static bool retro_load_game_common()
 
 		// Initialization done
 		HandleMessage(RETRO_LOG_INFO, "[FBNeo] Driver successfully started\n");
+#ifdef __PS3__
+		ps3_benchmark_init();
+#endif
 	}
 	else
 	{
@@ -2488,7 +2512,7 @@ end:
 	RomDataExit();
 	IpsPatchExit();
 
-	return true;
+	return false;
 }
 
 static int retro_dat_romset_path(const struct retro_game_info* info)

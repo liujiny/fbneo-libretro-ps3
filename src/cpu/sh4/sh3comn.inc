@@ -256,17 +256,19 @@ static UINT32 sh3_internal_r(UINT32 offset, UINT32 mem_mask)
 
 			case PCDR_PDDR:
 				{
+					UINT32 ret = 0;
 					if (mem_mask & 0xffff0000)
 					{
 						//logerror("'%s' (%08x): unmapped internal read from %08x mask %08x (PCDR)\n",tag(), m_pc & AM,(offset *4)+0x4000000,mem_mask);
-						return ReadPort(SH3_PORT_C)<<24;
+						ret |= ReadPort(SH3_PORT_C)<<24;
 					}
 
 					if (mem_mask & 0x0000ffff)
 					{
 						//logerror("'%s' (%08x): unmapped internal read from %08x mask %08x (PDDR)\n",tag(), m_pc & AM,(offset *4)+0x4000000,mem_mask);
-						return ReadPort(SH3_PORT_D)<<8;
+						ret |= ReadPort(SH3_PORT_D)<<8;
 					}
+					return ret;
 				}
 				break;
 

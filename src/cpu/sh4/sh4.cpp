@@ -28,7 +28,24 @@ Redistributions may not be sold, nor may they be used in a commercial product or
  *****************************************************************************/
 
 #include "burnint.h"
+#if defined(_XBOX)
+#include "salvia_cv1k_probe.h"
+#endif
+#ifndef SALVIA_CV1K_PROBE
+#define SALVIA_CV1K_PROBE 0
+#endif
 #include "sh4_intf.h"
+#ifdef __PS3__
+static void sh3_trace_pc(UINT32 pc, UINT32 op);
+#endif
+#ifdef __PS3__
+#include <unistd.h>
+#include <fcntl.h>
+#include <stdio.h>
+#endif
+#ifdef __PS3__
+#include "ps3_memory_pool.h"
+#endif
 #include <stddef.h>
 #include "sh4.h"
 #include "sh4regs.h"
@@ -51,23 +68,86 @@ static int c_md7;
 static int c_md8;
 static int c_clock;
 
-static UINT32  m_ppc;
-static UINT32  m_pc;
+// The PPC backend and the interpreter share this register file. Guest state is
+// still scanned field by field, so existing save states retain their layout.
+#if defined(_XBOX) || defined(SH3_PPC_DRC_TEST) || defined(__PS3__)
+#define SH3_PPC_DRC 1
+struct Sh3PpcState {
+ UINT32 r[16], pc, ppc, pr, sr, gbr, mach, macl, ea, delay;
+ INT32 icount, total;
+ UINT8 **read_map, **write_map;
+ // Optional board-declared RAM window behind a read handler. Long reads at
+ // the watched address still use the handler (CV1000's idle-loop shortcut).
+ UINT8 *read_mirror;
+ UINT32 mirror_page, mirror_watch, mirror_handler;
+ // Host copy of the registered RAM window base. A driver field, never scanned:
+ // the generated code keeps it in r4 so a translated access does not rebuild
+ // the 32-bit host pointer, and every registration or mapping change revokes
+ // the code before this can go stale.
+ UINT8 *ram_base;
+ // Host pointer to the write stamps (sh3_drc_ppc.h), another driver field the
+ // generated stores read through this structure. NULL unless the diagnostics
+ // build compiles the mechanism in.
+ UINT8 *code_stamp;
+ UINT32 *drc_read_table;
+ UINT32 *drc_write_table;
+ UINT32 drc_watch_ptr;
+};
+static Sh3PpcState sh3_ppc_state;
+// Driver-owned idle configuration, used by servicing and diagnostics. Never scanned
+// or embedded into generated instructions. The mirror lifecycle revokes it.
+static const UINT32 *sh3_idle_watch_ram, *sh3_idle_watch_pc;
+// Optional board-declared device reads. Configuration is not guest state.
+struct Sh3DrcDeviceRead {
+ UINT32 address, handler;
+ pSh3ReadLongHandler callback;
+};
+static Sh3DrcDeviceRead sh3_device_reads[2];
+#define m_r sh3_ppc_state.r
+#define m_pc sh3_ppc_state.pc
+#define m_ppc sh3_ppc_state.ppc
+#define m_pr sh3_ppc_state.pr
+#define m_sr sh3_ppc_state.sr
+#define m_gbr sh3_ppc_state.gbr
+#define m_mach sh3_ppc_state.mach
+#define m_macl sh3_ppc_state.macl
+#define m_ea sh3_ppc_state.ea
+#define m_delay sh3_ppc_state.delay
+#define m_sh4_icount sh3_ppc_state.icount
+#define sh3_total_cycles sh3_ppc_state.total
+static void sh3_drc_reset();
+static void sh3_drc_exit();
+static void sh3_drc_invalidate_ram();
+static void sh3_drc_mapping_changed(UINT32 start, UINT32 end, INT32 type);
+#if SALVIA_CV1K_STAMP_PROBE
+// Write-stamp hook for the interpreter's three write primitives, which are the
+// only interpreted route into RAM (and the DMAC's and the cheat path's route).
+static void sh3_drc_stamp_mark(UINT32 addr);
+#endif
+#else
+static UINT32 m_r[16], m_pc, m_ppc, m_pr, m_sr, m_gbr;
+static UINT32 m_mach, m_macl, m_ea, m_delay;
+static INT32 m_sh4_icount, sh3_total_cycles;
+static void sh3_drc_reset() {}
+static void sh3_drc_exit() {}
+#if SALVIA_CV1K_STAMP_PROBE
+static void sh3_drc_stamp_mark(UINT32) {}
+#endif
+void Sh3SetDrc(INT32) {}
+void Sh3SetDrcReadMirror(UINT8*, UINT32, UINT32, INT32) {}
+void Sh3SetDrcIdleWatch(const UINT32*, const UINT32*) {}
+void Sh3SetDrcDeviceRead(INT32, UINT32, INT32) {}
+INT32 Sh3SetDrcRam(UINT8*, UINT32, UINT32, UINT32) { return 0; }
+bool Sh3DrcPreallocate(void) { return false; }
+#endif
+
 static UINT32  m_spc;
-static UINT32  m_pr;
-static UINT32  m_sr;
 static UINT32  m_ssr;
-static UINT32  m_gbr;
 static UINT32  m_vbr;
-static UINT32  m_mach;
-static UINT32  m_macl;
-static UINT32  m_r[16];
 static UINT32  m_rbnk[2][8];
 static UINT32  m_sgr;
 static UINT32  m_fr[16];
 static UINT32  m_xf[16];
-static UINT32  m_ea;
-static UINT32  m_delay;
 static UINT32  m_cpu_off;
 static UINT32  m_pending_irq;
 static UINT32  m_test_irq;
@@ -149,7 +229,6 @@ static int     m_dma_source_increment[4];
 static int     m_dma_destination_increment[4];
 static int     m_dma_mode[4];
 
-static int     m_sh4_icount;
 static int     m_is_slave;
 static int     m_cpu_clock;
 static int     m_bus_clock;
@@ -183,7 +262,6 @@ static int     m_cpu_type;
 static UINT32  m_sh3internal_upper[0x3000/4];
 static UINT32  m_sh3internal_lower[0x1000];
 
-static INT32   sh3_total_cycles; // used externally (drivers/etc)
 
 static INT32   sh3_end_run;
 
@@ -285,31 +363,39 @@ struct sh4_dtimer
 	void run_prescale(INT32 cyc) {
 		prescale_counter += cyc * m_ratio;
 		while (prescale_counter >= timer_prescaler) {
-			prescale_counter -= timer_prescaler;
+			// The prescaler keeps running even when the timer is stopped.
+			// Consume whole ticks together, stopping at EVERY callback: it may
+			// reload the timer, change its prescaler, or alter the remainder.
+			if (!running) {
+				prescale_counter %= timer_prescaler;
+				return;
+			}
 
-			// note: we can't optimize this, f.ex:
-			//run(prescale_counter / timer_prescaler); prescale_counter %= timer_prescaler;
-			// why? when the timer hits, the prescaler can & will change.
+			UINT32 ticks = 1;
+			if (prescale_counter - timer_prescaler >= (UINT32)timer_prescaler)
+				ticks = prescale_counter / timer_prescaler;
 
-			// note2:
-			//run(1);  this is just the contents of run(1) from below
-			if (running) {
-				time_current += 1;
+			// Check the first increment separately to preserve zero periods,
+			// overdue timers and the UINT32 counter's wraparound behavior.
+			const UINT32 until_event = (UINT32)(time_current + 1) >= time_trig
+				? 1 : time_trig - time_current;
+			// A zero distance here represents a full 2^32-tick wrap.
+			if (until_event == 0 || ticks < until_event) {
+				time_current += ticks;
+				prescale_counter -= ticks * timer_prescaler;
+				return;
+			}
 
-				if (time_current >= time_trig) { // should be while (retrig needs this, not used by sh4)
-					//if (counter) bprintf(0, _T("timer %d hits @ %d\n"), timer_param, time_current);
-
-					if (retrig == 0) {
-						running = 0;
-						//time_trig = -1;
-						//stop();
-						//break;
-					}
-					if (timer_exec) {
-						timer_exec(timer_param); // NOTE: this cb _might_ re-start/init the timer!
-					}
-					//time_current -= time_trig;
-				}
+			prescale_counter -= until_event * timer_prescaler;
+			time_current += until_event;
+			if (retrig == 0) {
+				running = 0;
+			}
+			if (timer_exec) {
+#if SALVIA_CV1K_PROBE
+				++salvia_cv1k_probe[11];
+#endif
+				timer_exec(timer_param);
 			}
 		}
 	}
@@ -328,6 +414,9 @@ struct sh4_dtimer
 					//break;
 				}
 				if (timer_exec) {
+#if SALVIA_CV1K_PROBE
+					++salvia_cv1k_probe[11];
+#endif
 					timer_exec(timer_param); // NOTE: this cb _might_ re-start/init the timer!
 				}
 				//time_current -= time_trig;
@@ -539,6 +628,8 @@ INT32 Sh3Scan(INT32 nAction)
 
 	cave_blitter_delay.scan();
 
+	if (nAction & ACB_WRITE) sh3_drc_reset();
+
 	return 0;
 }
 
@@ -582,6 +673,9 @@ static INT32 Sh3MapInit()
 
 INT32 Sh3MapMemory(UINT8* pMemory, UINT32 nStart, UINT32 nEnd, INT32 nType)
 {
+#ifdef SH3_PPC_DRC
+	sh3_drc_mapping_changed(nStart, nEnd, nType);
+#endif
 	UINT8* Ptr = pMemory - nStart;
 	UINT8** pMemMapR = MemMapR + (nStart >> SH3_SHIFT);
 	UINT8** pMemMapW = MemMapW + (nStart >> SH3_SHIFT);
@@ -598,6 +692,9 @@ INT32 Sh3MapMemory(UINT8* pMemory, UINT32 nStart, UINT32 nEnd, INT32 nType)
 
 INT32 Sh3MapHandler(uintptr_t nHandler, UINT32 nStart, UINT32 nEnd, INT32 nType)
 {
+#ifdef SH3_PPC_DRC
+	sh3_drc_mapping_changed(nStart, nEnd, nType);
+#endif
 	UINT8** pMemMapR = MemMapR + (nStart >> SH3_SHIFT);
 	UINT8** pMemMapW = MemMapW + (nStart >> SH3_SHIFT);
 	UINT8** pMemMapF = MemMapF + (nStart >> SH3_SHIFT);
@@ -629,6 +726,12 @@ INT32 Sh3SetReadByteHandler(INT32 i, pSh3ReadByteHandler pHandler)
 		return 1;
 	}
 
+#ifdef SH3_PPC_DRC
+	if (sh3_ppc_state.mirror_handler == (UINT32)i) {
+		sh3_ppc_state.read_mirror = NULL;
+		sh3_drc_invalidate_ram();
+	}
+#endif
 	ReadByte[i] = pHandler;
 	return 0;
 }
@@ -651,6 +754,12 @@ INT32 Sh3SetReadWordHandler(INT32 i, pSh3ReadWordHandler pHandler)
 		return 1;
 	}
 
+#ifdef SH3_PPC_DRC
+	if (sh3_ppc_state.mirror_handler == (UINT32)i) {
+		sh3_ppc_state.read_mirror = NULL;
+		sh3_drc_invalidate_ram();
+	}
+#endif
 	ReadWord[i] = pHandler;
 	return 0;
 }
@@ -673,6 +782,12 @@ INT32 Sh3SetReadLongHandler(INT32 i, pSh3ReadLongHandler pHandler)
 		return 1;
 	}
 
+#ifdef SH3_PPC_DRC
+	if (sh3_ppc_state.mirror_handler == (UINT32)i) {
+		sh3_ppc_state.read_mirror = NULL;
+		sh3_drc_invalidate_ram();
+	}
+#endif
 	ReadLong[i] = pHandler;
 	return 0;
 }
@@ -718,6 +833,11 @@ void Sh3BurnCycles(INT32 cycles)
 {
 	m_sh4_icount -= cycles;
 	sh3_total_cycles += cycles;
+}
+
+INT32 Sh3GetRemainingCycles()
+{
+	return m_sh4_icount;
 }
 
 INT32 Sh3Idle(INT32 cycles)
@@ -846,6 +966,9 @@ void Sh3Init(INT32 num, INT32 hz, char md0, char md1, char md2, char md3, char m
 	Sh3SetReadPortHandler(Sh3DummyReadLong);
 	Sh3SetWritePortHandler(Sh3DummyWriteLong);
 
+	Sh3SetDrcReadMirror(NULL, 0, 0, 0);
+	Sh3SetDrcDeviceRead(0, 0, -1);
+	Sh3SetDrcDeviceRead(1, 0, -1);
 	Sh3MapInit();
 
 	Sh3MapHandler(SH3_MAXHANDLER - 1, SH3_LOWER_REGBASE, SH3_LOWER_REGEND, MAP_READ | MAP_WRITE);
@@ -889,6 +1012,7 @@ void Sh3Init(INT32 num, INT32 hz, char md0, char md1, char md2, char md3, char m
 
 void Sh3Exit()
 {
+	sh3_drc_exit();
 }
 
 void Sh3Open(const INT32 i)
@@ -966,7 +1090,11 @@ static inline UINT32 RL(UINT32 A)
 	UINT8 *pr = MemMapR[ A >> SH3_SHIFT ];
 	if ( (uintptr_t)pr >= SH3_MAXHANDLER ) {
 		UINT32 V = *((UINT32 *)(pr + (A & SH3_PAGEM)));
+#ifdef LSB_FIRST
+		// Mapped memory contains native-endian 16-bit words. Only little-
+		// endian hosts need to exchange the halves of a 32-bit SH3 access.
 		V = (V << 16) | (V >> 16);
+#endif
 		return V;
 	}
 	return ReadLong[(uintptr_t)pr](A);
@@ -974,6 +1102,9 @@ static inline UINT32 RL(UINT32 A)
 
 static inline void WB(UINT32 A, UINT8 V)
 {
+#if SALVIA_CV1K_STAMP_PROBE
+	sh3_drc_stamp_mark(A);
+#endif
 	if (A < 0xe0000000) {
 		A &= AM;
 		WaitState(A, 1);
@@ -992,6 +1123,9 @@ static inline void WB(UINT32 A, UINT8 V)
 
 static inline void WW(UINT32 A, UINT16 V)
 {
+#if SALVIA_CV1K_STAMP_PROBE
+	sh3_drc_stamp_mark(A);
+#endif
 	if (A < 0xe0000000) {
 		A &= AM;
 		WaitState(A, 1);
@@ -1010,6 +1144,9 @@ static inline void WW(UINT32 A, UINT16 V)
 
 static inline void WL(UINT32 A, UINT32 V)
 {
+#if SALVIA_CV1K_STAMP_PROBE
+	sh3_drc_stamp_mark(A);
+#endif
 	if (A < 0xe0000000) {
 		A &= AM;
 		WaitState(A, 1);
@@ -1017,7 +1154,9 @@ static inline void WL(UINT32 A, UINT32 V)
 
 	UINT8 *pr = MemMapW[ A >> SH3_SHIFT ];
 	if ((uintptr_t)pr >= SH3_MAXHANDLER) {
+#ifdef LSB_FIRST
 		V = (V << 16) | (V >> 16);
+#endif
 		*((UINT32 *)(pr + (A & SH3_PAGEM))) = (UINT32)V;
 		return;
 	}
@@ -1626,16 +1765,43 @@ static inline void DT(const UINT16 opcode)
 #if BUSY_LOOP_HACKS
 	{
 		UINT32 next_opcode = RW(m_ppc & AM);
-		/* DT   Rn
-		 * BF   $-2
-		 */
+		int step_cycles = 0;
 		if (next_opcode == 0x8bfd)
 		{
-			while (m_r[n] > 1 && m_sh4_icount > 4)
+			/* DT   Rn
+			 * BF   $-2
+			 */
+			step_cycles = 4;
+		}
+		else if (next_opcode == 0x8ffd && RW((m_ppc + 2) & AM) == 0x0009)
+		{
+			/* DT   Rn
+			 * BF/S $-3
+			 * NOP
+			 */
+			step_cycles = 4;
+		}
+		else if (next_opcode == 0x8ffc && RW((m_ppc + 2) & AM) == 0x0009 && m_pc >= 4 && RW((m_pc - 4) & AM) == 0x0009)
+		{
+			/* NOP
+			 * DT   Rn
+			 * BF/S $-4
+			 * NOP
+			 */
+			step_cycles = 5;
+		}
+
+		if (step_cycles > 0 && m_r[n] > 1 && m_sh4_icount > step_cycles)
+		{
+			UINT32 max_r = m_r[n] - 1;
+			UINT32 max_icount = (UINT32)(m_sh4_icount - 1) / (UINT32)step_cycles;
+			UINT32 count = (max_r < max_icount) ? max_r : max_icount;
+			if (count > 0)
 			{
-				m_r[n]--;
-				m_sh4_icount -= 4;   /* cycles for DT (1) and BF taken (3) */
-				sh3_total_cycles += 4;
+				m_r[n] -= count;
+				INT32 cycle_delta = (INT32)(count * (UINT32)step_cycles);
+				m_sh4_icount -= cycle_delta;
+				sh3_total_cycles += cycle_delta;
 			}
 		}
 	}
@@ -3843,6 +4009,7 @@ static void sh34_device_reset()
 
 void Sh3Reset()
 {
+	sh3_drc_reset();
 	sh34_device_reset();
 
 	m_SH4_TCOR0 = 0xffffffff;
@@ -4641,13 +4808,43 @@ static inline void execute_one(const UINT16 opcode)
 	}
 
 
-static int Sh3Run_timerhack(int cycles)
+#include "sh3_drc_work_profile.h"
+#ifdef SH3_PPC_DRC
+template<bool Count> static bool sh3_drc_service_movll(unsigned opcode);
+#include "sh3_drc_ppc.h"
+#if SALVIA_CV1K_STAMP_PROBE
+// The interpreter's WB/WW/WL call this from far above, before the DRC headers
+// exist. It is the whole write-side hook set the stamps need.
+static void sh3_drc_stamp_mark(UINT32 addr) { Sh3Ppc::stamp_mark(addr); }
+#endif
+#endif
+
+#include "sh3_interpreter_hot.h"
+#include "sh3_fallback_observer.h"
+#ifdef SH3_PPC_DRC
+#include "sh3_drc_movll_service.h"
+#endif
+
+unsigned sh3_dbg_interp_op[16];
+unsigned long long sh3_prof_total_ticks, sh3_prof_prev_tick;
+namespace Sh3Ppc { extern unsigned long long sh3_gen_words[6]; extern unsigned long long sh3_gen_blocks; }
+unsigned long long sh3_prof_page_ticks[1024];
+unsigned sh3_prof_samples, sh3_prof_interp_samples;
+namespace Sh3Ppc { unsigned sh3_dbg_end_reason[8]; unsigned sh3_dbg_total_blocks; }
+unsigned long long sh3_dbg_timer_ticks, sh3_dbg_irq_ticks;
+unsigned long long sh3_dbg_svc_ticks, sh3_dbg_tail_ticks, sh3_dbg_tail_start;
+unsigned long long sh3_dbg_dispcall_ticks; unsigned sh3_dbg_dispcall_ok, sh3_dbg_dispcall_no;
+unsigned sh3_dbg_svc_calls;
+
+template<bool Count> static int Sh3Run_timerhack_impl(int cycles)
 {
+	if (Count) ++sh3_drc_work.slices;
 	m_sh4_icount = cycles;
 	sh3_end_run = 0;
 
 	if (m_cpu_off)
 	{
+		if (Count) ++sh3_drc_work.cpu_off_slices;
 		m_sh4_icount = 0;
 		sh3_total_cycles += cycles;
 		return cycles;
@@ -4655,23 +4852,89 @@ static int Sh3Run_timerhack(int cycles)
 
 	do
 	{
+		if (Count) {
+#ifdef SH3_PPC_DRC
+			sh3_drc_work.fallback.last_origin=!sh3_drc_enabled?SH3_FB_DISABLED:
+				(m_delay?SH3_FB_DELAY:(m_test_irq?SH3_FB_IRQ:SH3_FB_UNKNOWN));
+#else
+			sh3_drc_work.fallback.last_origin=SH3_FB_UNKNOWN;
+#endif
+		}
+#ifdef SH3_PPC_DRC
+#if SALVIA_CV1K_PROBE
+		// One pair per chained entry (about 900 per frame) instead of one per
+		// block, so the clock cost cannot dominate the measured span.
+		{
+			const unsigned long long dispatchStart=salvia_cv1k_tick();
+			const bool dispatchOk=sh3_drc_enabled && !m_delay && !m_test_irq && sh3_drc_dispatch_impl<true,Count>();
+			const unsigned long long dispatchEnd=salvia_cv1k_tick();
+			if(dispatchStart&&dispatchEnd) { salvia_cv1k_probe[4]+=dispatchEnd-dispatchStart; ++salvia_cv1k_probe[5]; }
+			if(dispatchOk) continue;
+		}
+#else
+		if (!sh3_drc_enabled) ++sh3_dbg_skip_disabled;
+		else if (m_delay) ++sh3_dbg_skip_delay;
+		else if (m_test_irq) ++sh3_dbg_skip_irq;
+#if defined(__PS3__)
+		{
+			bool ok = false;
+			if (sh3_drc_enabled && !m_delay && !m_test_irq) {
+				const unsigned long long d0 = sh3_tb_now();
+				ok = sh3_drc_dispatch_impl<true,Count>();
+				sh3_dbg_dispcall_ticks += sh3_tb_now() - d0;
+				if (ok) { sh3_dbg_dispcall_ok++; continue; }
+			}
+			sh3_dbg_dispcall_no++;
+		}
+#else
+		if (sh3_drc_enabled && !m_delay && !m_test_irq && sh3_drc_dispatch_impl<true,Count>()) continue;
+#endif
+#endif
+#endif
+#ifdef SH3_PPC_DRC
+		++sh3_dbg_interp;
+#if defined(__PS3__)
+		/* Which opcodes still fall back to the interpreter? Bucketed by
+		 * (opcode >> 12) because the top nibble is the phase class. */
+		if (sh3_dbg_interp > 8000000u && sh3_dbg_interp < 8000400u) {
+			unsigned op = sh3_cpu_readop16((UINT32)(m_pc & AM));
+			++sh3_dbg_interp_op[(op >> 12) & 0x0f];
+			if (sh3_dbg_interp < 8000060u)
+				sh3_drc_log("interp pc=%08x op=%04x r0=%08x r1=%08x",
+					(unsigned)(m_pc & AM), op,
+					(unsigned)m_r[0], (unsigned)m_r[1]);
+		}
+#endif
+#endif
+		int interpreterBefore = 0;
+		if (Count) { interpreterBefore = m_sh4_icount; ++sh3_drc_work.interpreter_steps; }
 		if (m_delay)
 		{
 			const UINT16 opcode = sh3_cpu_readop16((UINT32)(m_delay & AM));
+			if (Count) sh3_work_fallback_observe(opcode,m_delay,true);
 
 			m_delay = 0;
 			m_ppc = m_pc;
 
-			execute_one(opcode);
+			if (Count) ++sh3_drc_work.interpreter_hi8[opcode >> 8];
+#if defined(SH3_PPC_DRC_WORK_TEST)
+			if (Count) ++sh3_drc_work.interpreter_op16[opcode];
+#endif
+			sh3_execute_hot_fallback(opcode);
 		}
 		else
 		{
 			const UINT16 opcode = sh3_cpu_readop16((UINT32)(m_pc & AM));
+			if (Count) sh3_work_fallback_observe(opcode,m_pc,false);
 
 			m_pc += 2;
 			m_ppc = m_pc;
 
-			execute_one(opcode);
+			if (Count) ++sh3_drc_work.interpreter_hi8[opcode >> 8];
+#if defined(SH3_PPC_DRC_WORK_TEST)
+			if (Count) ++sh3_drc_work.interpreter_op16[opcode];
+#endif
+			sh3_execute_hot_fallback(opcode);
 		}
 		if (m_test_irq && !m_delay)
 		{
@@ -4679,16 +4942,86 @@ static int Sh3Run_timerhack(int cycles)
 		}
 
 		EAT(1);
+		if (Count) {
+			unsigned elapsed=(unsigned)(interpreterBefore-m_sh4_icount);
+			sh3_drc_work.interpreter_cycles+=elapsed;
+			sh3_drc_work.fallback.finish(elapsed);
+		}
 	} while( m_sh4_icount > 0);// && !sh3_end_run );
 
 	cycles = cycles - m_sh4_icount;
 
+#if SALVIA_CV1K_PROBE
+	{
+		const unsigned long long timerStart=salvia_cv1k_tick();
+		{ const unsigned long long __t0 = sh3_tb_now();
+		{ const unsigned long long __tt0 = sh3_tb_now();
+		sh4_run_timers(cycles);
+		sh3_dbg_timer_ticks += sh3_tb_now() - __tt0; }
+		sh3_dbg_timer_ticks += sh3_tb_now() - __t0; }
+		const unsigned long long timerEnd=salvia_cv1k_tick();
+		if(timerStart && timerEnd) salvia_cv1k_probe[10]+=timerEnd-timerStart;
+	}
+#else
 	sh4_run_timers(cycles);
+#endif
 
 	m_sh4_icount = 0;
 
 	return cycles;
 }
+
+unsigned long long sh3_dbg_sh3run_ticks;
+static int Sh3Run_timerhack(int cycles)
+{
+#if defined(__PS3__)
+	const unsigned long long t0 = sh3_tb_now();
+	const int r = Sh3Run_timerhack_impl<false>(cycles);
+	sh3_dbg_sh3run_ticks += sh3_tb_now() - t0;
+	return r;
+#else
+	return Sh3Run_timerhack_impl<false>(cycles);
+#endif
+}
+
+#if defined(__PS3__)
+/* Instruction-level pc trace for interpreter/DRC divergence hunting.
+ * Enabled by /dev_hdd0/tmp/fbneo-pc-trace; buffered, capped. */
+static unsigned sh3_trace_count;
+static char sh3_trace_buf[65536];
+static unsigned sh3_trace_used;
+static int sh3_trace_on(void)
+{
+ static int on = -1;
+ if (on < 0)
+ {
+  int fd = open("/dev_hdd0/tmp/fbneo-pc-trace", O_RDONLY);
+  on = (fd >= 0) ? 1 : 0;
+  if (fd >= 0) close(fd);
+  if (on) unlink("/dev_hdd0/tmp/fbneo-pctrace.log");
+ }
+ return on;
+}
+static void sh3_trace_flush(void)
+{
+ int fd;
+ if (!sh3_trace_used) return;
+ fd = open("/dev_hdd0/tmp/fbneo-pctrace.log", O_WRONLY | O_CREAT | O_APPEND, 0666);
+ if (fd >= 0) { if (write(fd, sh3_trace_buf, sh3_trace_used) < 0) { } close(fd); }
+ sh3_trace_used = 0;
+}
+static void sh3_trace_pc(UINT32 pc, UINT32 op)
+{
+ int n;
+ if (!sh3_trace_on()) return;
+ if (sh3_trace_count >= 200000) return;
+ ++sh3_trace_count;
+ if (sh3_trace_used > sizeof(sh3_trace_buf) - 16) sh3_trace_flush();
+ n = snprintf(sh3_trace_buf + sh3_trace_used, 24, "%08x %04x\n", (unsigned)pc, (unsigned)op);
+ if (n > 0) sh3_trace_used += (unsigned)n;
+ if (sh3_trace_count == 200000) sh3_trace_flush();
+}
+#endif
 
 static int Sh3Run_normal(int cycles)
 {
@@ -4718,6 +5051,9 @@ static int Sh3Run_normal(int cycles)
 		{
 			const UINT16 opcode = sh3_cpu_readop16((UINT32)(m_pc & AM));
 
+#ifdef __PS3__
+			sh3_trace_pc((UINT32)(m_pc & AM), opcode);
+#endif
 			m_pc += 2;
 			m_ppc = m_pc;
 
@@ -4739,10 +5075,380 @@ static int Sh3Run_normal(int cycles)
 	return cycles;
 }
 
+/* Sh3DrcPreallocate_glue: the implementation lives in namespace Sh3Ppc. */
+bool Sh3DrcPreallocate(void) { return Sh3Ppc::Sh3DrcPreallocate(); }
+
+#ifdef SH3_STATIC_REC
+#include "sh3_types.h"
+
+extern "C" {
+    extern int g_sh3_static_rec_enabled;
+    extern Sh3VM g_vm;
+    extern Sh3BlockFn g_rom_blocks[2097152];
+    extern Sh3BlockFn g_ram_blocks[2097152];
+    void sh3_interpret_block(Sh3VM *vm);
+}
+
+static int Sh3Run_static(int cycles)
+{
+    if (m_test_irq && !m_delay)
+        sh4_check_pending_irq();
+
+    g_vm.pc = (m_delay) ? (m_delay & AM) : (m_pc & AM);
+    g_vm.pr = m_pr;
+    g_vm.sr = m_sr;
+    g_vm.t  = m_sr & 1;
+    g_vm.gbr = m_gbr;
+    g_vm.vbr = m_vbr;
+    g_vm.mach = m_mach;
+    g_vm.macl = m_macl;
+    g_vm.spc = m_spc;
+    g_vm.ssr = m_ssr;
+    for (int i = 0; i < 16; ++i) g_vm.r[i] = m_r[i];
+    m_delay = 0;
+
+    g_vm.cycles += cycles;
+    while (g_vm.cycles > 0) {
+        uint32_t masked = g_vm.pc & 0x0fffffff;
+        Sh3BlockFn block = (masked >= 0x0c000000) ?
+            g_ram_blocks[(masked - 0x0c000000) >> 1] :
+            g_rom_blocks[masked >> 1];
+        if (__builtin_expect(block != NULL, 1)) {
+            block(&g_vm);
+        } else {
+            sh3_interpret_block(&g_vm);
+        }
+    }
+
+    int done = cycles - g_vm.cycles;
+    g_vm.cycles = 0;
+    sh3_total_cycles += done;
+
+    m_pc = g_vm.pc;
+    m_pr = g_vm.pr;
+    m_sr = (g_vm.sr & ~1) | (g_vm.t & 1);
+    m_gbr = g_vm.gbr;
+    m_vbr = g_vm.vbr;
+    m_mach = g_vm.mach;
+    m_macl = g_vm.macl;
+    m_spc = g_vm.spc;
+    m_ssr = g_vm.ssr;
+    for (int i = 0; i < 16; ++i) m_r[i] = g_vm.r[i];
+
+    return done;
+}
+#endif
+
 int Sh3Run(int cycles)
 {
-	return (timer_granularity == 0) ? Sh3Run_normal(cycles) : Sh3Run_timerhack(cycles);
+#ifdef SH3_STATIC_REC
+    if (g_sh3_static_rec_enabled) {
+        return Sh3Run_static(cycles);
+    }
+#endif
+	#ifdef SH3_PPC_DRC
+		if (timer_granularity == 0) { ++sh3_dbg_normal_runs; return Sh3Run_normal(cycles); }
+#else
+		if (timer_granularity == 0) return Sh3Run_normal(cycles);
+#endif
+	return Sh3Run_timerhack(cycles);
 }
+
+#if defined(_XBOX) || defined(SH3_PPC_DRC_TEST) || defined(__PS3__)
+// Portable 64-bit counter format: MSVC spells it %I64u, everything else %llu.
+#if defined(_MSC_VER)
+#define SH3_WORK_COUNT "I64u"
+#else
+#define SH3_WORK_COUNT "llu"
+#endif
+unsigned sh3_dbg_native_calls, sh3_dbg_fallbacks, sh3_dbg_dispatches;
+unsigned sh3_dbg_hist_try[64], sh3_dbg_hist_native[64], sh3_dbg_hist_fetch[64];
+unsigned sh3_dbg_skip_delay, sh3_dbg_skip_irq, sh3_dbg_skip_disabled, sh3_dbg_normal_runs;
+unsigned sh3_dbg_compiles, sh3_dbg_resets, sh3_dbg_invalidates;
+unsigned sh3_dbg_rb_tag, sh3_dbg_rb_map, sh3_dbg_rb_src, sh3_dbg_rb_ok;
+unsigned long long sh3_dbg_blk_ticks, sh3_dbg_disp_ticks;
+unsigned sh3_dbg_exit_hist[17];
+unsigned sh3_dbg_timed_calls;
+unsigned sh3_dbg_ex_fetch, sh3_dbg_ex_budget, sh3_dbg_interp;
+
+void Sh3DrcLogCounters(unsigned frame)
+{
+ static unsigned ln_, lf_, ldel_, lirq_, ldis_, lnorm_;
+ unsigned n = sh3_dbg_native_calls, f = sh3_dbg_fallbacks;
+ unsigned dl = sh3_dbg_skip_delay, iq = sh3_dbg_skip_irq, di = sh3_dbg_skip_disabled;
+ unsigned nm = sh3_dbg_normal_runs;
+ (void)sh3_dbg_dispatches;
+ {
+  static unsigned long long ld_ = 0, lb_ = 0;
+  unsigned long long d = sh3_dbg_disp_ticks, b = sh3_dbg_blk_ticks;
+  /* mftb runs at 79.8 MHz: 1 tick = 12.53 ns */
+  {
+   static unsigned le_[17]; char buf[160]; int k, n = 0;
+   for(k = 0; k < 17; k++) {
+    unsigned cur = sh3_dbg_exit_hist[k];
+    n += snprintf(buf + n, sizeof(buf) - n, " %u:%u", k, cur - le_[k]);
+    le_[k] = cur;
+   }
+   {
+    static unsigned long long tt_ = 0;
+    sh3_drc_log("  timer_us f=%u timer_us=%u", frame, (unsigned)((sh3_dbg_timer_ticks - tt_) / 79.8));
+    tt_ = sh3_dbg_timer_ticks;
+    {
+     static unsigned long long ls_ = 0, lt2_ = 0; static unsigned lc_ = 0;
+     {
+      static unsigned long long ld_ = 0; static unsigned a_ = 0, b_ = 0;
+      static unsigned long long lr_ = 0;
+      sh3_drc_log("  sh3run f=%u us=%u", frame, (unsigned)((sh3_dbg_sh3run_ticks - lr_) / 79.8));
+      lr_ = sh3_dbg_sh3run_ticks;
+      sh3_drc_log("  dispcall f=%u us=%u ok=%u nook=%u", frame,
+       (unsigned)((sh3_dbg_dispcall_ticks - ld_) / 79.8), sh3_dbg_dispcall_ok - a_, sh3_dbg_dispcall_no - b_);
+      ld_ = sh3_dbg_dispcall_ticks; a_ = sh3_dbg_dispcall_ok; b_ = sh3_dbg_dispcall_no;
+     }
+     sh3_drc_log("  svc f=%u svc_us=%u calls=%u tail_us=%u", frame,
+      (unsigned)((sh3_dbg_svc_ticks - ls_) / 79.8), sh3_dbg_svc_calls - lc_,
+      (unsigned)((sh3_dbg_tail_ticks - lt2_) / 79.8));
+     ls_ = sh3_dbg_svc_ticks; lc_ = sh3_dbg_svc_calls; lt2_ = sh3_dbg_tail_ticks;
+    }
+   }
+   {
+    char b3[200]; int k3, n3 = 0;
+    for(k3 = 0; k3 < 8; k3++)
+     n3 += snprintf(b3 + n3, sizeof(b3) - n3, " %d:%u", k3, Sh3Ppc::sh3_dbg_end_reason[k3]);
+    sh3_drc_log("  endreason f=%u total=%u%s", frame, Sh3Ppc::sh3_dbg_total_blocks, b3);
+   {
+    int rank, k, used = 0, best[8], i;
+    unsigned long long bestv[8];
+    for (i = 0; i < 8; i++) { best[i] = -1; bestv[i] = 0; }
+    for (k = 0; k < 1024; k++) {
+     unsigned long long v = sh3_prof_page_ticks[k];
+     if (!v) continue;
+     for (rank = 0; rank < 8; rank++) {
+      if (v > bestv[rank]) {
+       int m;
+       for (m = 7; m > rank; m--) { bestv[m] = bestv[m-1]; best[m] = best[m-1]; }
+       bestv[rank] = v; best[rank] = k;
+       break;
+      }
+     }
+     used++;
+    }
+    {
+     char b4[300]; int n4 = 0;
+     for (rank = 0; rank < 8 && best[rank] >= 0; rank++) {
+      const unsigned addr = (best[rank] >= 1) ? (0x3c0000u + (unsigned)(best[rank]-1)*16u) : 0u;
+      n4 += snprintf(b4 + n4, sizeof(b4) - n4, " %05x:%u", addr, (unsigned)(bestv[rank] / 79.8));
+     }
+     sh3_drc_log("  hot16 f=%u used=%d%s", frame, used, b4);
+    {
+     char b5[220]; int n5 = 0;
+     for (k = 0; k < 6; k++)
+      n5 += snprintf(b5 + n5, sizeof(b5) - n5, " %d:%u", k,
+                     Sh3Ppc::sh3_gen_blocks ? (unsigned)(Sh3Ppc::sh3_gen_words[k] / Sh3Ppc::sh3_gen_blocks) : 0u);
+     sh3_drc_log("  genwords f=%u blocks=%u avg%s", frame, (unsigned)Sh3Ppc::sh3_gen_blocks, b5);
+    }
+    }
+    memset(sh3_prof_page_ticks, 0, sizeof(sh3_prof_page_ticks));
+   }
+   }
+#if SH3_PROFILE_SAMPLE
+   {
+    static unsigned long long lt_ = 0; static unsigned ls_ = 0;
+    sh3_drc_log("  prof f=%u samples=%u us=%u", frame,
+     (sh3_prof_samples - ls_) / 64u, (unsigned)((sh3_prof_total_ticks - lt_) / 79.8));
+    lt_ = sh3_prof_total_ticks; ls_ = sh3_prof_samples;
+   }
+#endif
+   sh3_drc_log("  exits_hist f=%u%s", frame, buf);
+   {
+    char b2[200]; int k2, n2 = 0;
+    for(k2 = 0; k2 < 16; k2++)
+     n2 += snprintf(b2 + n2, sizeof(b2) - n2, " %x:%u", k2, sh3_dbg_interp_op[k2]);
+    sh3_drc_log("  interp_op f=%u%s", frame, b2);
+   }
+  }
+  sh3_drc_log("  split f=%u disp_us=%u blk_us=%u native_d=%u",
+   frame, (unsigned)((d - ld_) / 79.8), (unsigned)((b - lb_) / 79.8), n - ln_);
+  ld_ = d; lb_ = b;
+ }
+ sh3_drc_log("work f=%u native=%u(+%u) fallback=%u(+%u) skip_delay=%u(+%u) skip_irq=%u(+%u) disabled=%u(+%u) normruns=%u(+%u)",
+  frame, n, n - ln_, f, f - lf_, dl, dl - ldel_, iq, iq - lirq_, di, di - ldis_, nm, nm - lnorm_);
+ {
+  static unsigned lc_ = 0, lr_ = 0, li_ = 0;
+  unsigned c = sh3_dbg_compiles, r = sh3_dbg_resets, iv = sh3_dbg_invalidates;
+ sh3_drc_log("  exits fetch=%u budget=%u interp=%u",
+   sh3_dbg_ex_fetch, sh3_dbg_ex_budget, sh3_dbg_interp);
+ sh3_drc_log("  rebuild tag=%u map=%u src=%u clean=%u",
+   sh3_dbg_rb_tag, sh3_dbg_rb_map, sh3_dbg_rb_src, sh3_dbg_rb_ok);
+  sh3_drc_log("  compile=%u(+%u) reset=%u(+%u) invalidate=%u(+%u)",
+   c, c - lc_, r, r - lr_, iv, iv - li_);
+  lc_ = c; lr_ = r; li_ = iv;
+ }
+ ln_ = n; lf_ = f; ldel_ = dl; lirq_ = iq; ldis_ = di; lnorm_ = nm;
+}
+
+void Sh3WorkBeginFrame() { ++sh3_drc_work.frames; }
+void Sh3WorkReset() { sh3_drc_work.clear(); }
+int Sh3WorkRun(int cycles)
+{
+	if (timer_granularity == 0) {
+		++sh3_drc_work.normal_mode_slices;
+		return Sh3Run_normal(cycles);
+	}
+	return Sh3Run_timerhack_impl<true>(cycles);
+}
+// Invoked from the existing CV1000 pause hook. No clocks or file operations here.
+void Sh3WorkReport(void (*emit)(const char*))
+{
+	if (!emit) return;
+	char text[768];
+	const Sh3DrcWorkProfile &p = sh3_drc_work;
+	sprintf(text,"drc_work sampling=random-1-in-256-disjoint frames=%" SH3_WORK_COUNT " slices=%" SH3_WORK_COUNT " cpu_off=%" SH3_WORK_COUNT " normal_mode=%" SH3_WORK_COUNT " counts_only=1",
+		p.frames,p.slices,p.cpu_off_slices,p.normal_mode_slices); emit(text);
+	sprintf(text,"drc_work_dispatch calls=%" SH3_WORK_COUNT " lookups=%" SH3_WORK_COUNT " rebuilds=%" SH3_WORK_COUNT " validation_spans=%" SH3_WORK_COUNT " requested_words=%" SH3_WORK_COUNT,
+		p.dispatch_calls,p.lookups,p.rebuilds,p.validation_spans,p.validation_words); emit(text);
+#if SALVIA_CV1K_SHADOW
+	// Shadow dispatch record: the entries that read the copy instead of the
+	// record. `lookups` above is then only the entries that did not.
+	{
+		const Sh3WorkCount entries=p.lookups+p.shadow_hits;
+		sprintf(text,"drc_work_shadow hits=%" SH3_WORK_COUNT " entries=%" SH3_WORK_COUNT " hits_pct=%u bytes=%u entry_bytes=%u pred_miss=%" SH3_WORK_COUNT " pred_miss_pct=%u touch=%d",
+			p.shadow_hits,entries,entries?(unsigned)(p.shadow_hits*100/entries):0u,
+			(unsigned)(Sh3Ppc::CACHE_SETS*(int)sizeof(Sh3Ppc::Shadow)),(unsigned)sizeof(Sh3Ppc::Shadow),
+			p.shadow_pred_miss,p.shadow_hits?(unsigned)(p.shadow_pred_miss*100/p.shadow_hits):0u,
+			(int)SALVIA_CV1K_SHADOW_TOUCH); emit(text);
+	}
+#endif
+	sprintf(text,"drc_work_rebuild_causes conflict=%" SH3_WORK_COUNT " source=%" SH3_WORK_COUNT " read_map=%" SH3_WORK_COUNT,
+		p.rebuild_conflict,p.rebuild_source,p.rebuild_map); emit(text);
+	// Why the blocks that ran ended: window_out, jump_rel, jump_indirect,
+	// branch_delayed, self_loop, unsupported. Only window_out and jump_rel and
+	// branch_delayed have compile-time targets a fusion pass could continue
+	// into, so this is the sizing measurement for longer blocks.
+	sprintf(text,"drc_work_block_ends window_out=%" SH3_WORK_COUNT " jump_rel=%" SH3_WORK_COUNT " jump_indirect=%" SH3_WORK_COUNT " branch_delayed=%" SH3_WORK_COUNT " self_loop=%" SH3_WORK_COUNT " unsupported=%" SH3_WORK_COUNT " delayed_eligible=%" SH3_WORK_COUNT " delayed_ineligible=%" SH3_WORK_COUNT,
+		p.block_ends[0],p.block_ends[1],p.block_ends[2],p.block_ends[3]+p.block_ends[6]+p.block_ends[7],p.block_ends[4],p.block_ends[5],p.block_ends[6],p.block_ends[7]); emit(text);
+	sprintf(text,"drc_work_arena bytes=%u words=%u recycles=%" SH3_WORK_COUNT " evictions=%" SH3_WORK_COUNT " evicted_slots=%" SH3_WORK_COUNT " peak_words=%" SH3_WORK_COUNT " peak_bytes=%" SH3_WORK_COUNT,
+		(unsigned)Sh3Ppc::CACHE_BYTES,(unsigned)(Sh3Ppc::CACHE_BYTES/4),p.arena_recycles,p.arena_evictions,p.arena_evicted_slots,p.arena_peak,p.arena_peak*4); emit(text);
+	// Guest stores the emitted blocks perform per sampled entry, summed over
+	// blocks that ran. This is the cost side of any per-store invalidation
+	// signal (a write stamp per store), so it is what decides whether a
+	// store-side epoch is affordable at all.
+	sprintf(text,"drc_work_stores per_entry=%u entries=%" SH3_WORK_COUNT " generated=%" SH3_WORK_COUNT,
+		p.native_calls?(unsigned)(p.block_stores/p.native_calls):0u,p.native_calls,p.block_stores); emit(text);
+#if SALVIA_CV1K_STAMP_PROBE
+	// Write-stamp cross-check on the same sampled entries. `clean` is the share
+	// of validations whose block's two lines had not been written since the
+	// dispatcher last cleared them -- the share a stamp skip would remove --
+	// and `missed` is the count that must be zero before it may.
+	sprintf(text,"drc_work_stamp level=%d entries=%" SH3_WORK_COUNT " clean=%" SH3_WORK_COUNT " dirty=%" SH3_WORK_COUNT " missed=%" SH3_WORK_COUNT " lines=%u",
+		(int)SALVIA_CV1K_STAMP_PROBE,p.stamp_entries,p.stamp_clean,p.stamp_dirty,p.stamp_missed,
+		(unsigned)Sh3Ppc::STAMP_LINES); emit(text);
+#endif
+#if SALVIA_CV1K_CHAIN_PROBE
+	// Chain probe: the share of entries that ran in a chain that had not yet
+	// executed a guest store. That share is the ceiling a chain-scoped link
+	// could skip revalidation for.
+	sprintf(text,"drc_work_chain clean=%" SH3_WORK_COUNT " dirty=%" SH3_WORK_COUNT,
+		p.chain_clean_entries,p.chain_dirty_entries); emit(text);
+#endif
+#if SALVIA_CV1K_LINK_PROBE
+	// Block-link sizing: the share of entries that follow a block ending at its
+	// own sequential completion (what a successor fast path could enter without
+	// a lookup), and the lookup-set footprint those entries read.
+	{
+		unsigned touched=0;
+		for(unsigned i=0;i<(unsigned)Sh3Ppc::CACHE_SETS;++i) if(Sh3Ppc::lookup_touched[i]) ++touched;
+		sprintf(text,"drc_work_link entries=%" SH3_WORK_COUNT " sequential=%" SH3_WORK_COUNT " sequential_pct=%u sets=%u sets_touched=%u sets_bytes=%u touched_bytes=%u",
+			p.link_entries,p.link_sequential,p.link_entries?(unsigned)(p.link_sequential*100/p.link_entries):0u,
+			(unsigned)Sh3Ppc::CACHE_SETS,touched,(unsigned)(Sh3Ppc::CACHE_SETS*sizeof(Sh3Ppc::Lookup)),(unsigned)(touched*sizeof(Sh3Ppc::Lookup))); emit(text);
+	}
+#endif
+#if SALVIA_CV1K_LINK_PROBE >= 2
+	// Gate probe for a block link. Every share is printed with the raw counts so
+	// the numbers can be re-derived from the log; `stale` and `changed` are the
+	// two counters that must be zero. The line counts are the footprint of each
+	// candidate record layout over the window, in bytes.
+	{
+		unsigned hot=0,rec=0,src=0;
+		for(unsigned i=0;i<(unsigned)Sh3Ppc::LP_HOT_LINES;++i) if(Sh3Ppc::lp_hot_line[i]) ++hot;
+		for(unsigned i=0;i<(unsigned)Sh3Ppc::LP_REC_LINES;++i) if(Sh3Ppc::lp_rec_line[i]) ++rec;
+		for(unsigned i=0;i<(unsigned)Sh3Ppc::LP_SRC_LINES;++i) if(Sh3Ppc::lp_src_line[i]) ++src;
+		sprintf(text,"drc_work_link2 steps=%" SH3_WORK_COUNT " rom=%" SH3_WORK_COUNT " ram=%" SH3_WORK_COUNT " rom_pct=%u set_mask=%u"
+			" rec_hit=%" SH3_WORK_COUNT " rec_page=%" SH3_WORK_COUNT " rec_ok=%" SH3_WORK_COUNT " rec_ok_pct=%u rom_ok=%" SH3_WORK_COUNT
+			" set_hit=%" SH3_WORK_COUNT " set_page=%" SH3_WORK_COUNT " set_ok=%" SH3_WORK_COUNT " set_ok_pct=%u set_rom_ok=%" SH3_WORK_COUNT
+			" stale=%" SH3_WORK_COUNT " changed=%" SH3_WORK_COUNT " sh_hit=%" SH3_WORK_COUNT " sh_ok=%" SH3_WORK_COUNT " sh_ok_pct=%u sh_stale=%" SH3_WORK_COUNT,
+			p.link2_steps,p.link2_rom_entries,p.link2_ram_entries,
+			(p.link2_rom_entries+p.link2_ram_entries)?(unsigned)(p.link2_rom_entries*100/(p.link2_rom_entries+p.link2_ram_entries)):0u,
+			(unsigned)Sh3Ppc::LP_SET_MASK,
+			p.link2_rec_hit,p.link2_rec_page,p.link2_rec_ok,p.link2_steps?(unsigned)(p.link2_rec_ok*100/p.link2_steps):0u,p.link2_rom_ok,
+			p.link2_set_hit,p.link2_set_page,p.link2_set_ok,p.link2_steps?(unsigned)(p.link2_set_ok*100/p.link2_steps):0u,p.link2_set_rom_ok,
+			p.link2_stale,p.link2_rom_changed,
+			p.link2_sh_hit,p.link2_sh_ok,(p.link2_rom_entries+p.link2_ram_entries)?(unsigned)(p.link2_sh_ok*100/(p.link2_rom_entries+p.link2_ram_entries)):0u,p.link2_sh_stale); emit(text);
+		sprintf(text,"drc_work_link2_footprint hot_lines=%u hot_bytes=%u rec_lines=%u rec_bytes=%u src_lines=%u src_bytes=%u"
+			" hot_bytes_max=%u rec_bytes_max=%u",
+			hot,(unsigned)(hot*64),rec,(unsigned)(rec*64),src,(unsigned)(src*64),
+			(unsigned)Sh3Ppc::LP_HOT_LINES*64,(unsigned)Sh3Ppc::LP_REC_LINES*64); emit(text);
+	}
+#endif
+	// Emitted words per compiled block by phase: where the generated code goes,
+	// independent of how often each block then runs.
+	sprintf(text,"drc_work_codegen blocks=%" SH3_WORK_COUNT " body=%" SH3_WORK_COUNT " memaddr=%" SH3_WORK_COUNT " memguard=%" SH3_WORK_COUNT " memaccess=%" SH3_WORK_COUNT " complete=%" SH3_WORK_COUNT " exit=%" SH3_WORK_COUNT,
+		Sh3Ppc::sh3_gen_blocks,Sh3Ppc::sh3_gen_words[Sh3Ppc::CAT_BODY],Sh3Ppc::sh3_gen_words[Sh3Ppc::CAT_MEMADDR],
+		Sh3Ppc::sh3_gen_words[Sh3Ppc::CAT_MEMGUARD],Sh3Ppc::sh3_gen_words[Sh3Ppc::CAT_MEMACCESS],
+		Sh3Ppc::sh3_gen_words[Sh3Ppc::CAT_COMPLETE],Sh3Ppc::sh3_gen_words[Sh3Ppc::CAT_EXIT]); emit(text);
+	sprintf(text,"drc_work_execution native_calls=%" SH3_WORK_COUNT " native_guest_cycles=%" SH3_WORK_COUNT " interpreter_steps=%" SH3_WORK_COUNT " interpreter_guest_cycles=%" SH3_WORK_COUNT " not_host_time=1",
+		p.native_calls,p.native_cycles,p.interpreter_steps,p.interpreter_cycles); emit(text);
+	sprintf(text,"drc_work_exits gate=%" SH3_WORK_COUNT " fetch=%" SH3_WORK_COUNT " no_entry=%" SH3_WORK_COUNT " short_budget=%" SH3_WORK_COUNT " partial=%" SH3_WORK_COUNT " boundary=%" SH3_WORK_COUNT,
+		p.exit_gate,p.exit_fetch,p.exit_no_entry,p.exit_budget,p.exit_partial,p.exit_boundary); emit(text);
+	// Bounded groups remain safe even if every 64-bit counter reaches 20 digits.
+	for (unsigned start=0;start<34;start+=8) {
+		int n=sprintf(text,"drc_work_snapshot_lengths");
+		for (unsigned i=start;i<start+8 && i<34;++i) n+=sprintf(text+n," %u=%" SH3_WORK_COUNT,i,p.snapshot_lengths[i]);
+		emit(text);
+	}
+	bool selected[256]={false};
+	for (unsigned rank=0;rank<8;++rank) {
+		unsigned best=256;
+		for (unsigned i=0;i<256;++i)
+			if (!selected[i] && p.interpreter_hi8[i] && (best==256 || p.interpreter_hi8[i]>p.interpreter_hi8[best])) best=i;
+		if (best==256) break;
+		selected[best]=true;
+		sprintf(text,"drc_work_interpreter rank=%u opcode_hi8=%02X count=%" SH3_WORK_COUNT,rank+1,best,p.interpreter_hi8[best]); emit(text);
+	}
+#if defined(SH3_PPC_DRC_WORK_TEST)
+	{
+		// Exact interpreter opcodes, highest first. Bounded output; a fixed
+		// 16-entry insertion list keeps the report allocation-free.
+		unsigned top_op[16]; Sh3WorkCount top_ct[16];
+		memset(top_op,0,sizeof(top_op)); memset(top_ct,0,sizeof(top_ct));
+		for (unsigned i=0;i<0x10000u;++i) {
+			Sh3WorkCount v=p.interpreter_op16[i];
+			if (!v) continue;
+			for (unsigned k=0;k<16;++k) {
+				if (v>top_ct[k]) {
+					for (unsigned j=15;j>k;--j) { top_ct[j]=top_ct[j-1]; top_op[j]=top_op[j-1]; }
+					top_ct[k]=v; top_op[k]=i;
+					break;
+				}
+			}
+		}
+		for (unsigned k=0;k<16 && top_ct[k];++k) {
+			sprintf(text,"drc_work_opcode16 rank=%u opcode=%04X count=%" SH3_WORK_COUNT,k+1,top_op[k],top_ct[k]);
+			emit(text);
+		}
+	}
+#endif
+	sh3_fallback_report(p.fallback,emit);
+	sh3_idle_candidate_report(p.idle_candidates,emit);
+	sprintf(text,"drc_movll_service handled=%" SH3_WORK_COUNT " guest_cycles=%" SH3_WORK_COUNT " rejected=%" SH3_WORK_COUNT " handler=RL native_returns_retained=1",
+		p.movll_services,p.movll_service_cycles,p.movll_service_rejects); emit(text);
+	for(unsigned i=0;i<2;++i) {
+		sprintf(text,"drc_device_read slot=%u address=%08X handler=%u handled=%" SH3_WORK_COUNT " guest_cycles=%" SH3_WORK_COUNT " fallback=%" SH3_WORK_COUNT " handler_path=RL",
+			i,sh3_device_reads[i].address,sh3_device_reads[i].handler,p.device_services[i],p.device_service_cycles[i],p.device_fallbacks[i]); emit(text);
+	}
+	sh3_drc_work.clear();
+}
+#undef SH3_WORK_COUNT
+#endif
 
 #if 0
 void device_start()

@@ -1,6 +1,11 @@
 /* emulation of Altera Cyclone EPIC12 FPGA programmed as a blitter */
 
 void epic12_init(INT32 ram_size, UINT16 *ram, UINT8 *dippy);
+
+/* cumulative time (mftb ticks) spent inside the blitter */
+unsigned long long epic12_GetBlitTicks(void);
+extern unsigned long long epic12_blit_calls, epic12_blit_skipped;
+extern unsigned long long epic12_blit_pixels;
 void epic12_exit();
 void epic12_reset();
 void epic12_scan(INT32 nAction, INT32 *pnMin);

@@ -23,6 +23,29 @@ void sh4_set_cave_blitter_delay_timer(int cycles);
 INT32 sh4_get_cpu_speed();
 void Sh3SetClockCV1k(INT32 clock);
 
+// Xbox 360 SH3 -> PPC dynamic recompiler; other hosts keep the interpreter.
+void Sh3SetDrc(INT32 enabled);
+// One 64 KiB RAM page whose read handler is side-effect-free except for a
+// single watched longword. Re-register after changing the read handlers.
+void Sh3SetDrcReadMirror(UINT8* ram, UINT32 page, UINT32 watched, INT32 handler);
+// Sampled MOV.L diagnostics only; caller retains pointer ownership until exit.
+// Register after SetDrcReadMirror; replacing the mirror revokes this metadata.
+void Sh3SetDrcIdleWatch(const UINT32* idle_ram, const UINT32* idle_pc);
+// Two optional external MOV.L device reads, retaining RL and the live handler.
+// A negative handler revokes the slot. Registration changes flush DRC blocks.
+void Sh3SetDrcDeviceRead(INT32 slot, UINT32 address, INT32 handler);
+// Register a fully mapped RAM window (power-of-two span and backing size).
+// Mapping/handler changes revoke the window and invalidate compiled blocks.
+extern unsigned sh3_dbg_native_calls, sh3_dbg_fallbacks, sh3_dbg_dispatches;
+extern unsigned sh3_dbg_hist_try[64], sh3_dbg_hist_native[64], sh3_dbg_hist_fetch[64];
+extern unsigned sh3_dbg_skip_delay, sh3_dbg_skip_irq, sh3_dbg_skip_disabled, sh3_dbg_normal_runs;
+extern unsigned sh3_dbg_compiles, sh3_dbg_resets, sh3_dbg_invalidates;
+extern unsigned sh3_dbg_rb_tag, sh3_dbg_rb_map, sh3_dbg_rb_src, sh3_dbg_rb_ok;
+void Sh3DrcLogCounters(unsigned frame);
+INT32 Sh3SetDrcRam(UINT8* ram, UINT32 start, UINT32 span, UINT32 backing_size);
+/* Reserve the JIT block tables; call before the driver takes its big buffers. */
+bool Sh3DrcPreallocate(void);
+
 void Sh3SetTimerGranularity(INT32 timergransh); // speedhack
 
 void Sh3Open(const INT32 i);
@@ -53,6 +76,7 @@ void Sh3RunEnd();
 void Sh3BurnUntilInt();
 
 INT32 Sh3TotalCycles();
+INT32 Sh3GetRemainingCycles();
 void Sh3NewFrame();
 void Sh3BurnCycles(INT32 cycles);
 INT32 Sh3Idle(INT32 cycles);

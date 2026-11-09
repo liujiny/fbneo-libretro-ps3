@@ -16,10 +16,10 @@
 #if REALLY_SIMPLE == 1
 
 #if TRANSPARENT == 1
-			pen = *gfx2;
+			pen = epic12_in16_to_argb(*gfx2);
 			if (pen & 0x20000000)
 			{
-			*bmp = pen;
+			*bmp = epic12_argb_to_in16(pen);
 #else
 			*bmp = *gfx2;
 #endif
@@ -27,7 +27,7 @@
 /*************** REGULAR INNER LOOPS ****************/
 #else // NOT REALLY_SIMPLE
 
-			pen = *gfx2;
+			pen = epic12_in16_to_argb(*gfx2);
 
 #if TRANSPARENT == 1
 			if (pen & 0x20000000)
@@ -46,7 +46,7 @@
 			#if BLENDED == 1
 
 				// convert destination to clr
-				pen_to_clr(*bmp, &d_clr.trgb);
+				pen_to_clr(epic12_in16_to_argb(*bmp), &d_clr.trgb);
 				//d_clr.u32 = *bmp >> 3; // using the union is actually significantly slower than our pen_to_clr to function!
 				#if _SMODE == 0
 				//g_profiler.start(PROFILER_USER7);
@@ -182,7 +182,7 @@
 			#endif
 
 			// write result
-			*bmp = clr_to_pen(&s_clr.trgb)|(pen&0x20000000);
+			*bmp = epic12_argb_to_in16(clr_to_pen(&s_clr.trgb)|(pen&0x20000000));
 			//*bmp = (s_clr.u32<<3)|(pen&0x20000000); // using the union is actually significantly slower than our clr_to_pen function!
 
 #endif // END NOT REALLY SIMPLE

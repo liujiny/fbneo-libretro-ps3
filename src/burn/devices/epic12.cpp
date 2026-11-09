@@ -12,6 +12,12 @@ Redistributions may not be sold, nor may they be used in a commercial product or
 #include "thready.h"
 #include "rectangle.h"
 #include <math.h> // floor()
+#ifdef __PS3__
+#include "ps3_memory_pool.h"
+#include <sys/memory.h>
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 static const int EP1C_VRAM_CLK_NANOSEC = 13;
 static const int EP1C_SRAM_CLK_NANOSEC = 20;
@@ -59,6 +65,81 @@ static UINT32 m_gfx_clip_x_shadowcopy, m_gfx_clip_y_shadowcopy;
 static int m_gfx_size;
 static UINT32 *m_bitmaps;
 static rectangle m_clip;
+
+#ifdef __PS3__
+#define EPIC12_SLAB_LINES 32
+#define EPIC12_TOTAL_LINES 4096
+#define EPIC12_LINE_WIDTH 8192
+#define EPIC12_SLAB_COUNT (EPIC12_TOTAL_LINES / EPIC12_SLAB_LINES)
+
+static UINT16 *epic12_slabs[EPIC12_SLAB_COUNT];
+static UINT16 *epic12_row_ptrs[EPIC12_TOTAL_LINES];
+static UINT16 *epic12_zero_row = NULL;
+static UINT16 *epic12_scratch_slab = NULL;
+
+/* Unallocated VRAM rows must read as zeros. Returning the NULL entry from the
+ * row table (as this used to) makes every blit that samples an untouched part of
+ * VRAM read from address zero, which shows up as missing tiles and corruption. */
+static UINT16 epic12_zero_line[EPIC12_LINE_WIDTH];
+
+/* VRAM stores the hardware's native 1:5:5:5 word: bit 15 alpha, 5:5:5 colour.
+ * Keeping it 16 bits halves VRAM to 64 MiB, which is what lets all 4096 lines
+ * exist on a 213 MiB console. */
+static inline UINT32 epic12_in16_to_argb(UINT16 v)
+{
+	return ((UINT32)(v & 0x8000) << 14) | ((UINT32)(v & 0x7c00) << 9) |
+	       ((UINT32)(v & 0x03e0) << 6)  | ((UINT32)(v & 0x001f) << 3);
+}
+static inline UINT16 epic12_argb_to_in16(UINT32 p)
+{
+	return (UINT16)(((p >> 14) & 0x8000) | ((p >> 9) & 0x7c00) |
+	                ((p >> 6) & 0x03e0)  | ((p >> 3) & 0x001f));
+}
+
+static inline UINT16* epic12_get_read_row(UINT32 y)
+{
+	UINT16 *row = epic12_row_ptrs[y & (EPIC12_TOTAL_LINES - 1)];
+	if (!row) {
+		if (!epic12_zero_row) epic12_zero_row = epic12_zero_line;
+		return epic12_zero_row;
+	}
+	return row;
+}
+
+static inline UINT16* epic12_get_write_row(UINT32 y)
+{
+	y &= (EPIC12_TOTAL_LINES - 1);
+	UINT32 slab_idx = y / EPIC12_SLAB_LINES;
+	if (!epic12_slabs[slab_idx]) {
+		ps3_mem_diag_set_next_label("epic12_vram");
+		epic12_slabs[slab_idx] = (UINT16*)BurnMalloc(EPIC12_SLAB_LINES * EPIC12_LINE_WIDTH * sizeof(UINT16));
+		ps3_mem_diag_print("[EPIC12] alloc slab %u line %u ptr=%p\n", slab_idx, y, epic12_slabs[slab_idx]);
+		if (!epic12_slabs[slab_idx]) {
+			/* Out of memory for this slab: alias it onto the shared scratch slab so
+			 * the blit still lands somewhere instead of being dropped (dropped
+			 * writes leave blank bands where the game expects graphics). */
+			if (epic12_scratch_slab) {
+				epic12_slabs[slab_idx] = epic12_scratch_slab;
+				{
+					UINT32 base2 = slab_idx * EPIC12_SLAB_LINES, r2;
+					for (r2 = 0; r2 < EPIC12_SLAB_LINES; r2++)
+						epic12_row_ptrs[base2 + r2] = epic12_scratch_slab + (r2 * EPIC12_LINE_WIDTH);
+				}
+				return epic12_row_ptrs[y];
+			}
+			/* The zero row is shared by every unallocated read row.
+			 * Never return it as a writable destination. */
+			return NULL;
+		}
+		memset(epic12_slabs[slab_idx], 0, EPIC12_SLAB_LINES * EPIC12_LINE_WIDTH * sizeof(UINT16));
+		UINT32 base = slab_idx * EPIC12_SLAB_LINES;
+		for (UINT32 r = 0; r < EPIC12_SLAB_LINES; r++) {
+			epic12_row_ptrs[base + r] = epic12_slabs[slab_idx] + (r * EPIC12_LINE_WIDTH);
+		}
+	}
+	return epic12_row_ptrs[y];
+}
+#endif
 
 static UINT64 epic12_device_blit_delay;
 static int m_blitter_busy;
@@ -298,18 +379,72 @@ static void blitter_delay_callback(int)
 
 static void gfx_exec(); // forward
 
+#ifdef __PS3__
+static inline unsigned long long epic12_tb_now(void)
+{
+	unsigned long long v;
+	__asm__ __volatile__("mftb %0" : "=r"(v));
+	return v;
+}
+#endif
+unsigned long long epic12_blit_pixels; /* destination pixels submitted to the blitter */
+static inline void epic12_count_draw(int dimx, int dimy)
+{
+	if (dimx > 0 && dimy > 0)
+		epic12_blit_pixels += (unsigned long long)dimx * (unsigned long long)dimy;
+}
+static unsigned long long epic12_blit_ticks;
+unsigned long long epic12_blit_skipped, epic12_blit_calls;
+unsigned long long epic12_GetBlitTicks(void) { return epic12_blit_ticks; }
+
+static int epic12_skip_blit = -1;
 static void run_blitter_cb()
 {
 	epic12_device_blit_delay = 0;
+	if (epic12_skip_blit < 0) {
+		int fd = open("/dev_hdd0/tmp/fbneo-skip-blit", O_RDONLY);
+		epic12_skip_blit = (fd >= 0) ? 1 : 0;
+		if (fd >= 0) close(fd);
+	}
+	if (epic12_skip_blit) { epic12_blit_skipped++; return; }
+#ifdef __PS3__
+	{
+		const unsigned long long t0 = epic12_tb_now();
+		gfx_exec();
+		++epic12_blit_calls;
+		epic12_blit_ticks += epic12_tb_now() - t0;
+	}
+#else
 	gfx_exec();
+#endif
 }
 
 void epic12_exit()
 {
 	thready.exit();
 
+#ifdef __PS3__
+	for (UINT32 i = 0; i < EPIC12_SLAB_COUNT; i++) {
+		if (epic12_slabs[i]) {
+			BurnFree(epic12_slabs[i]);
+			epic12_slabs[i] = NULL;
+		}
+	}
+	if (epic12_scratch_slab) {
+		BurnFree(epic12_scratch_slab);
+		epic12_scratch_slab = NULL;
+	}
+	if (epic12_zero_row) {
+		BurnFree(epic12_zero_row);
+		epic12_zero_row = NULL;
+	}
+	m_bitmaps = NULL;
+#else
 	BurnFree(m_bitmaps);
+#endif
+#ifndef __PS3__
 	BurnFree(m_ram16_copy);
+#endif
 
 	if (pal16) {
 		BurnFree(pal16);
@@ -324,12 +459,77 @@ void epic12_init(INT32 ram_size, UINT16 *ram, UINT8 *dippy)
 
 	m_ram16 = ram;
 
+#ifdef __PS3__
+	ps3_mem_diag_set_next_label("epic12_ram16");
+#endif
+#ifdef __PS3__
+	/* The shadow copy costs 16 MiB and PS3 needs that memory for VRAM. The
+	 * blitter reads main RAM directly instead; a torn read can only affect one
+	 * command word. */
+	m_ram16_copy = m_ram16;
+#else
 	m_ram16_copy = (UINT16*)BurnMalloc(ram_size);
+#endif
 
 	dips = dippy;
 
+#ifdef __PS3__
+	{
+		sys_memory_info_t mi;
+		if (sys_memory_get_user_memory_size(&mi) == 0)
+			ps3_mem_diag_print("[EPIC12] init total_user=%u available_user=%u",
+				(unsigned)mi.total_user_memory, (unsigned)mi.available_user_memory);
+	}
+	if (!epic12_zero_row) {
+		epic12_zero_row = (UINT16*)BurnMalloc(EPIC12_LINE_WIDTH * sizeof(UINT16));
+		if (epic12_zero_row) memset(epic12_zero_row, 0, EPIC12_LINE_WIDTH * sizeof(UINT16));
+	}
+	memset(epic12_slabs, 0, sizeof(epic12_slabs));
+	for (UINT32 i = 0; i < EPIC12_TOTAL_LINES; i++) {
+		epic12_row_ptrs[i] = epic12_zero_row ? epic12_zero_row : (UINT16*)m_ram16;
+	}
+	/* Allocate the VRAM slabs now, while the game has not yet taken the memory.
+	 * Lazy allocation during play always failed: by the first blit the process is
+	 * down to a few megabytes, so every write was dropped and the screen stayed
+	 * blank. Reserve as much as fits while keeping a working margin. */
+	{
+		UINT32 i;
+		UINT32 reserved = 0;
+		ps3_mem_diag_set_next_label("epic12_scratch");
+		epic12_scratch_slab = (UINT16*)BurnMalloc(EPIC12_SLAB_LINES * EPIC12_LINE_WIDTH * sizeof(UINT16));
+		if (epic12_scratch_slab)
+			memset(epic12_scratch_slab, 0, EPIC12_SLAB_LINES * EPIC12_LINE_WIDTH * sizeof(UINT16));
+		UINT32 slab_limit = EPIC12_SLAB_COUNT;
+		{
+			/* Cache-behaviour experiment: a tiny VRAM breaks the picture but keeps
+			 * the instruction count identical, so a frame-time change isolates
+			 * guest memory locality. */
+			int fd = open("/dev_hdd0/tmp/fbneo-vram-small", O_RDONLY);
+			if (fd >= 0) { close(fd); slab_limit = 8; }
+		}
+		for (i = 0; i < slab_limit; i++) {
+			sys_memory_info_t mi;
+			if (sys_memory_get_user_memory_size(&mi) != 0) break;
+			if (mi.available_user_memory < 16u * 1024u * 1024u) break;
+			ps3_mem_diag_set_next_label("epic12_vram");
+			epic12_slabs[i] = (UINT16*)BurnMalloc(EPIC12_SLAB_LINES * EPIC12_LINE_WIDTH * sizeof(UINT16));
+			if (!epic12_slabs[i]) break;
+			memset(epic12_slabs[i], 0, EPIC12_SLAB_LINES * EPIC12_LINE_WIDTH * sizeof(UINT16));
+			{
+				UINT32 base = i * EPIC12_SLAB_LINES, r;
+				for (r = 0; r < EPIC12_SLAB_LINES; r++)
+					epic12_row_ptrs[base + r] = epic12_slabs[i] + (r * EPIC12_LINE_WIDTH);
+			}
+			++reserved;
+		}
+		ps3_mem_diag_print("[EPIC12] reserved %u of %u VRAM slabs at init", reserved, (unsigned)EPIC12_SLAB_COUNT);
+	}
+	m_gfx_size = 0x2000 * 0x1000;
+	m_bitmaps = (UINT32*)epic12_zero_row;
+#else
 	m_gfx_size = 0x2000 * 0x1000;
 	m_bitmaps = (UINT32*)BurnMalloc (m_gfx_size * 4);
+#endif
 
 	m_clip.set(0, 0x2000-1, 0, 0x1000-1);
 
@@ -350,7 +550,11 @@ void epic12_init(INT32 ram_size, UINT16 *ram, UINT8 *dippy)
 	m_blit_idle_op_bytes = 0;
 
 	epic12_set_blitter_clipping_margin(1);
-	epic12_set_blitter_sleep_on_busy(1);
+	{
+		int fd = open("/dev_hdd0/tmp/fbneo-no-busyburn", O_RDONLY);
+		epic12_set_blitter_sleep_on_busy(fd < 0 ? 1 : 0);
+		if (fd >= 0) close(fd);
+	}
 
 	thready.init(run_blitter_cb);
 
@@ -480,7 +684,11 @@ static void gfx_upload_shadow_copy(UINT32 *addr)
 static void gfx_upload(UINT32 *addr)
 {
 	UINT32 x,y, dst_p,dst_x_start,dst_y_start, dimx,dimy;
+#ifdef __PS3__
+	UINT16 *dst;
+#else
 	UINT32 *dst;
+#endif
 
 	// 0x20000000
 	READ_NEXT_WORD(addr);
@@ -500,22 +708,35 @@ static void gfx_upload(UINT32 *addr)
 	dimx = (READ_NEXT_WORD(addr) & 0x1fff) + 1;
 	dimy = (READ_NEXT_WORD(addr) & 0x0fff) + 1;
 
+	if (dst_x_start + dimx > 8192) dimx = 8192 - dst_x_start;
+	if (dst_y_start + dimy > 4096) dimy = 4096 - dst_y_start;
+
 	//bprintf(0, _T("GFX COPY: DST %02X,%02X,%03X DIM %02X,%03X\n"), dst_p,dst_x_start,dst_y_start, dimx,dimy);
 
 	for (y = 0; y < dimy; y++)
 	{
 		//dst = &m_bitmaps->pix(dst_y_start + y, 0);
-		dst = m_bitmaps + (dst_y_start + y) * 0x2000;
-
+#ifdef __PS3__
+		dst = epic12_get_write_row(dst_y_start + y);
+		if (!dst) {
+			/* Consume the upload even when its destination is unavailable,
+			 * otherwise the next command starts in the pixel payload. */
+			for (x = 0; x < dimx; x++) {
+				READ_NEXT_WORD(addr);
+			}
+			continue;
+		}
 		dst += dst_x_start;
+#else
+		dst = m_bitmaps + (dst_y_start + y) * 0x2000;
+		dst += dst_x_start;
+#endif
 
 		for (x = 0; x < dimx; x++)
 		{
 			UINT16 pendat = READ_NEXT_WORD(addr);
-			// real hw would upload the gfxword directly, but our VRAM is 32-bit, so convert it.
-			//dst[dst_x_start + x] = pendat;
-			*dst++ = ((pendat&0x8000)<<14) | ((pendat&0x7c00)<<9) | ((pendat&0x03e0)<<6) | ((pendat&0x001f)<<3);  // --t- ---- rrrr r--- gggg g--- bbbb b---  format
-			//dst[dst_x_start + x] = ((pendat&0x8000)<<14) | ((pendat&0x7c00)<<6) | ((pendat&0x03e0)<<3) | ((pendat&0x001f)<<0);  // --t- ---- ---r rrrr ---g gggg ---b bbbb  format
+			/* VRAM holds the hardware word verbatim (1:5:5:5). */
+			*dst++ = pendat;
 		}
 	}
 }
@@ -801,10 +1022,12 @@ static void gfx_draw(UINT32 *addr)
 			{
 				if (!blend)
 				{
+					epic12_count_draw(dimx, dimy);
 					draw_sprite_f0_ti1_tr1_plain(draw_params);
 				}
 				else
 				{
+					epic12_count_draw(dimx, dimy);
 					epic12_device_f0_ti1_tr1_blit_funcs[s_mode | (d_mode<<3)](draw_params);
 				}
 			}
@@ -812,10 +1035,12 @@ static void gfx_draw(UINT32 *addr)
 			{
 			if (!blend)
 				{
+					epic12_count_draw(dimx, dimy);
 					draw_sprite_f0_ti1_tr0_plain(draw_params);
 				}
 				else
 				{
+					epic12_count_draw(dimx, dimy);
 					epic12_device_f0_ti1_tr0_blit_funcs[s_mode | (d_mode<<3)](draw_params);
 				}
 			}
@@ -826,10 +1051,12 @@ static void gfx_draw(UINT32 *addr)
 			{
 				if (!blend)
 				{
+					epic12_count_draw(dimx, dimy);
 					draw_sprite_f1_ti1_tr1_plain(draw_params);
 				}
 				else
 				{
+					epic12_count_draw(dimx, dimy);
 					epic12_device_f1_ti1_tr1_blit_funcs[s_mode | (d_mode<<3)](draw_params);
 				}
 			}
@@ -837,10 +1064,12 @@ static void gfx_draw(UINT32 *addr)
 			{
 			if (!blend)
 				{
+					epic12_count_draw(dimx, dimy);
 					draw_sprite_f1_ti1_tr0_plain(draw_params);
 				}
 				else
 				{
+					epic12_count_draw(dimx, dimy);
 					epic12_device_f1_ti1_tr0_blit_funcs[s_mode | (d_mode<<3)](draw_params);
 				}
 			}
@@ -854,10 +1083,12 @@ static void gfx_draw(UINT32 *addr)
 			{
 				if (trans)
 				{
+					epic12_count_draw(dimx, dimy);
 					draw_sprite_f0_ti0_tr1_simple(draw_params);
 				}
 				else
 				{
+					epic12_count_draw(dimx, dimy);
 					draw_sprite_f0_ti0_tr0_simple(draw_params);
 				}
 			}
@@ -865,10 +1096,12 @@ static void gfx_draw(UINT32 *addr)
 			{
 				if (trans)
 				{
+					epic12_count_draw(dimx, dimy);
 					draw_sprite_f1_ti0_tr1_simple(draw_params);
 				}
 				else
 				{
+					epic12_count_draw(dimx, dimy);
 					draw_sprite_f1_ti0_tr0_simple(draw_params);
 				}
 
@@ -887,10 +1120,12 @@ static void gfx_draw(UINT32 *addr)
 			{
 				if (!blend)
 				{
+					epic12_count_draw(dimx, dimy);
 					draw_sprite_f0_ti0_plain(draw_params);
 				}
 				else
 				{
+					epic12_count_draw(dimx, dimy);
 					epic12_device_f0_ti0_tr1_blit_funcs[s_mode | (d_mode<<3)](draw_params);
 				}
 			}
@@ -898,10 +1133,12 @@ static void gfx_draw(UINT32 *addr)
 			{
 			if (!blend)
 				{
+					epic12_count_draw(dimx, dimy);
 					draw_sprite_f0_ti0_tr0_plain(draw_params);
 				}
 				else
 				{
+					epic12_count_draw(dimx, dimy);
 					epic12_device_f0_ti0_tr0_blit_funcs[s_mode | (d_mode<<3)](draw_params);
 				}
 			}
@@ -912,10 +1149,12 @@ static void gfx_draw(UINT32 *addr)
 			{
 				if (!blend)
 				{
+					epic12_count_draw(dimx, dimy);
 					draw_sprite_f1_ti0_plain(draw_params);
 				}
 				else
 				{
+					epic12_count_draw(dimx, dimy);
 					epic12_device_f1_ti0_tr1_blit_funcs[s_mode | (d_mode<<3)](draw_params);
 				}
 			}
@@ -923,10 +1162,12 @@ static void gfx_draw(UINT32 *addr)
 			{
 			if (!blend)
 				{
+					epic12_count_draw(dimx, dimy);
 					draw_sprite_f1_ti0_tr0_plain(draw_params);
 				}
 				else
 				{
+					epic12_count_draw(dimx, dimy);
 					epic12_device_f1_ti0_tr0_blit_funcs[s_mode | (d_mode<<3)](draw_params);
 				}
 			}
@@ -1108,6 +1349,14 @@ static void epic12_draw_screen16_24bpp()
 	INT32 scrollx = -m_gfx_scroll_x;
 	INT32 scrolly = -m_gfx_scroll_y;
 
+#ifdef __PS3__
+	static int s_epic12_draw_count = 0;
+	if (s_epic12_draw_count < 10 || (s_epic12_draw_count % 60) == 0) {
+		ps3_mem_diag_print("[EPIC12] draw_screen frame=%d bpp=%d scroll=(%d,%d)\n", s_epic12_draw_count, nBurnBpp, scrollx, scrolly);
+	}
+	s_epic12_draw_count++;
+#endif
+
 	UINT8  *dst = (UINT8  *)pBurnDraw;
 	UINT32 *src = (UINT32 *)m_bitmaps;
 	const INT32 heightmask = 0x1000 - 1;
@@ -1115,7 +1364,11 @@ static void epic12_draw_screen16_24bpp()
 
 	for (INT32 y = 0; y < nScreenHeight; y++)
 	{
+#ifdef __PS3__
+		UINT16 *s0 = epic12_get_read_row((y - scrolly) & heightmask);
+#else
 		UINT32 *s0 = &src[((y - scrolly) & heightmask) * 0x2000];
+#endif
 		INT32 sx;
 
 		switch (nBurnBpp) {
@@ -1124,8 +1377,13 @@ static void epic12_draw_screen16_24bpp()
 				{
 					sx = x - scrollx;
 					#ifdef __PS3__
-					UINT32 rgb = s0[sx & widthmask];
-					PutPix(dst, ((rgb & 0xf80000) >> 8) | ((rgb & 0x00fc00) >> 5) | ((rgb & 0x0000f8) >> 3));
+					{
+						/* 1:5:5:5 VRAM word -> RGB565 */
+						const UINT32 v = s0[sx & widthmask];
+						PutPix(dst, (UINT16)(((v & 0x7c00) >> 10 << 11) |
+						                     (((v & 0x03e0) >> 5) * 2 + ((v & 0x03e0) >> 9) << 5) |
+						                     (v & 0x001f)));
+					}
 					#else
 					PutPix(dst, pal16[s0[sx & widthmask]&((1<<24)-1)]);
 					#endif
@@ -1164,28 +1422,32 @@ void epic12_draw_screen(UINT8 &recalc_palette)
 
 	for (INT32 y = 0; y < nScreenHeight; y++)
 	{
+#ifdef __PS3__
+		UINT16 *s0 = epic12_get_read_row((y - scrolly) & heightmask);
+#else
 		UINT32 *s0 = &src[((y - scrolly) & heightmask) * 0x2000];
+#endif
 		UINT32 *d0 = dst + (y * nScreenWidth);
 		INT32 sx;
 		for (INT32 x = 0; x < nScreenWidth; x+=16)
 		{
 			sx = x - scrollx;
-			d0[x + 0] = s0[((sx + 0)) & widthmask];
-			d0[x + 1] = s0[((sx + 1)) & widthmask];
-			d0[x + 2] = s0[((sx + 2)) & widthmask];
-			d0[x + 3] = s0[((sx + 3)) & widthmask];
-			d0[x + 4] = s0[((sx + 4)) & widthmask];
-			d0[x + 5] = s0[((sx + 5)) & widthmask];
-			d0[x + 6] = s0[((sx + 6)) & widthmask];
-			d0[x + 7] = s0[((sx + 7)) & widthmask];
-			d0[x + 8] = s0[((sx + 8)) & widthmask];
-			d0[x + 9] = s0[((sx + 9)) & widthmask];
-			d0[x +10] = s0[((sx +10)) & widthmask];
-			d0[x +11] = s0[((sx +11)) & widthmask];
-			d0[x +12] = s0[((sx +12)) & widthmask];
-			d0[x +13] = s0[((sx +13)) & widthmask];
-			d0[x +14] = s0[((sx +14)) & widthmask];
-			d0[x +15] = s0[((sx +15)) & widthmask];
+			d0[x + 0] = epic12_in16_to_argb(s0[((sx + 0)) & widthmask]);
+			d0[x + 1] = epic12_in16_to_argb(s0[((sx + 1)) & widthmask]);
+			d0[x + 2] = epic12_in16_to_argb(s0[((sx + 2)) & widthmask]);
+			d0[x + 3] = epic12_in16_to_argb(s0[((sx + 3)) & widthmask]);
+			d0[x + 4] = epic12_in16_to_argb(s0[((sx + 4)) & widthmask]);
+			d0[x + 5] = epic12_in16_to_argb(s0[((sx + 5)) & widthmask]);
+			d0[x + 6] = epic12_in16_to_argb(s0[((sx + 6)) & widthmask]);
+			d0[x + 7] = epic12_in16_to_argb(s0[((sx + 7)) & widthmask]);
+			d0[x + 8] = epic12_in16_to_argb(s0[((sx + 8)) & widthmask]);
+			d0[x + 9] = epic12_in16_to_argb(s0[((sx + 9)) & widthmask]);
+			d0[x +10] = epic12_in16_to_argb(s0[((sx +10)) & widthmask]);
+			d0[x +11] = epic12_in16_to_argb(s0[((sx +11)) & widthmask]);
+			d0[x +12] = epic12_in16_to_argb(s0[((sx +12)) & widthmask]);
+			d0[x +13] = epic12_in16_to_argb(s0[((sx +13)) & widthmask]);
+			d0[x +14] = epic12_in16_to_argb(s0[((sx +14)) & widthmask]);
+			d0[x +15] = epic12_in16_to_argb(s0[((sx +15)) & widthmask]);
 		}
 	}
 }
@@ -1203,7 +1465,8 @@ UINT32 epic12_blitter_read(UINT32 offset)
 			{
 				//m_maincpu->spin_until_time(attotime::from_usec(10));
 				if (sleep_on_busy) {
-					Sh3BurnCycles(m_burn_cycles); // 0x400 @ (12800000*8)
+					INT32 rem = Sh3GetRemainingCycles();
+					Sh3BurnCycles(rem > 0 ? rem : m_burn_cycles);
 				}
 				//bprintf(0, _T("%d frame - blitter busy read....."), nCurrentFrame);
 
@@ -1277,7 +1540,15 @@ void epic12_scan(INT32 nAction, INT32 *pnMin)
 	SCAN_VAR(m_blit_idle_op_bytes);
 
 	if (~nAction & ACB_RUNAHEAD) {
+#ifdef __PS3__
+		for (int s = 0; s < EPIC12_SLAB_COUNT; s++) {
+			if (epic12_slabs[s]) {
+				ScanVar(epic12_slabs[s], EPIC12_SLAB_LINES * EPIC12_LINE_WIDTH * sizeof(UINT32), "epic12 slab");
+			}
+		}
+#else
 		ScanVar(m_bitmaps, m_gfx_size * 4, "epic12 vram");
+#endif
 	}
 	thready.scan();
 }

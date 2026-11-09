@@ -21,8 +21,25 @@ void ps3_mem_diag_frame_enabled(void);
 void ps3_mem_diag_probe_enabled(void);
 void ps3_mem_diag_life(const char *event);
 void ps3_mem_diag_video(const void *data, unsigned width, unsigned height, size_t pitch);
+void ps3_mem_diag_dump_video_frame(const void *data, unsigned width, unsigned height, size_t pitch, unsigned frame_number);
 void ps3_mem_diag_audio(const void *data, size_t frames);
 void ps3_mem_diag_direct_alloc(const char *purpose, size_t size, const void *ptr, const char *file, int line);
+void ps3_mem_diag_print(const char *format, ...);
+
+typedef struct {
+	size_t pool_total;
+	size_t pool_used;
+	size_t pool_peak;
+	size_t system_live;
+	size_t system_peak;
+	size_t native_live;
+	size_t native_peak;
+	size_t tracked_live_peak;
+	size_t fallback_count;
+	size_t allocation_failure_count;
+} ps3_memory_stats_t;
+
+void ps3_mem_get_stats(ps3_memory_stats_t *out);
 #ifdef __cplusplus
 }
 #endif

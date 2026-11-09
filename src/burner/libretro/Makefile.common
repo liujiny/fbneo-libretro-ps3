@@ -349,6 +349,7 @@ ifeq ($(INCLUDE_7Z_SUPPORT), 1)
 endif
 
 SOURCES_CXX += $(LIBRETRO_DIR)/libretro.cpp \
+	$(LIBRETRO_DIR)/ps3_benchmark.cpp \
 	$(LIBRETRO_DIR)/retro_cdemu.cpp \
 	$(LIBRETRO_DIR)/retro_common.cpp \
 	$(LIBRETRO_DIR)/retro_input.cpp \

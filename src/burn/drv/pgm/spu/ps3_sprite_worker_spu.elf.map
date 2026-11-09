@@ -1,0 +1,455 @@
+Archive member included because of file (symbol)
+
+/opt/ps3dev-gcc13/spu/lib/libsputhread.a(spu_thread_exit.o)
+                              /tmp/ccd6I4I9.o (spu_thread_exit)
+/opt/ps3dev-gcc13/spu/lib/libsputhread.a(spu_thread_send_event.o)
+                              /tmp/ccd6I4I9.o (spu_thread_send_event)
+/opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-atexit.o)
+                              /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/crt1.o (atexit)
+/opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-exit.o)
+                              /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/crt1.o (exit)
+/opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-impure.o)
+                              /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-exit.o) (_global_impure_ptr)
+/opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-__atexit.o)
+                              /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-atexit.o) (__register_exitproc)
+/opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-__call_atexit.o)
+                              /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-exit.o) (__call_exitprocs)
+/opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libgloss.a(exit.o)
+                              /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-exit.o) (_exit)
+
+Allocating common symbols
+Common symbol       size              file
+
+__ea_local_store    0x10              /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/crt1.o
+
+Memory Configuration
+
+Name             Origin             Length             Attributes
+*default*        0x0000000000000000 0xffffffffffffffff
+
+Linker script and memory map
+
+LOAD /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/crt1.o
+LOAD /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/crti.o
+LOAD /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/crtbegin.o
+LOAD /tmp/ccd6I4I9.o
+LOAD /opt/ps3dev-gcc13/spu/lib/libsputhread.a
+LOAD /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/libgcc.a
+START GROUP
+LOAD /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a
+LOAD /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libgloss.a
+END GROUP
+LOAD /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/libgcc_cachemgr.a
+LOAD /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/libgcc_cache64k.a
+LOAD /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/libgcc.a
+LOAD /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/crtend.o
+LOAD /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/crtn.o
+                0x0000000000000000                PROVIDE (__executable_start, 0x0)
+                0x0000000000000000                . = 0x0
+
+.interrupt      0x0000000000000000        0x4
+ *(.interrupt)
+ .interrupt     0x0000000000000000        0x4 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/crtn.o
+
+.interp
+ *(.interp)
+
+.note.gnu.build-id
+ *(.note.gnu.build-id)
+
+.hash
+ *(.hash)
+
+.gnu.hash
+ *(.gnu.hash)
+
+.dynsym
+ *(.dynsym)
+
+.dynstr
+ *(.dynstr)
+
+.gnu.version
+ *(.gnu.version)
+
+.gnu.version_d
+ *(.gnu.version_d)
+
+.gnu.version_r
+ *(.gnu.version_r)
+
+.rela.dyn       0x0000000000000004        0x0
+ *(.rela.init)
+ *(.rela.text .rela.text.* .rela.gnu.linkonce.t.*)
+ *(.rela.fini)
+ *(.rela.rodata .rela.rodata.* .rela.gnu.linkonce.r.*)
+ *(.rela.data .rela.data.* .rela.gnu.linkonce.d.*)
+ *(.rela.tdata .rela.tdata.* .rela.gnu.linkonce.td.*)
+ *(.rela.tbss .rela.tbss.* .rela.gnu.linkonce.tb.*)
+ *(.rela.ctors)
+ *(.rela.dtors)
+ *(.rela.got)
+ *(.rela.bss .rela.bss.* .rela.gnu.linkonce.b.*)
+                0x0000000000000004                PROVIDE (__rel_iplt_start, .)
+                0x0000000000000004                PROVIDE (__rel_iplt_end, .)
+                0x0000000000000004                PROVIDE (__rela_iplt_start, .)
+ *(.rela.iplt)
+                0x0000000000000004                PROVIDE (__rela_iplt_end, .)
+
+.rela.plt
+ *(.rela.plt)
+
+.init           0x0000000000000004       0x20
+ *(.init)
+ .init          0x0000000000000004        0xc /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/crti.o
+                0x0000000000000004                _init
+ .init          0x0000000000000010        0x4 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/crtbegin.o
+ .init          0x0000000000000014        0x4 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/crtend.o
+ .init          0x0000000000000018        0xc /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/crtn.o
+
+.plt
+ *(.plt)
+
+.iplt
+ *(.iplt)
+
+.text           0x0000000000000028     0x25a8
+ *(.text.unlikely .text.*_unlikely)
+ *(.text.exit .text.exit.*)
+ .text.exit     0x0000000000000028       0x58 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-exit.o)
+                0x0000000000000028                exit
+ *(.text.startup .text.startup.*)
+ .text.startup.main
+                0x0000000000000080      0xb00 /tmp/ccd6I4I9.o
+                0x0000000000000080                main
+ *(.text.hot .text.hot.*)
+ *(.text .stub .text.* .gnu.linkonce.t.*)
+ .text          0x0000000000000b80       0x68 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/crt1.o
+                0x0000000000000b80                _start
+ .text          0x0000000000000be8        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/crti.o
+ .text          0x0000000000000be8      0x1d8 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/crtbegin.o
+ .text          0x0000000000000dc0        0x0 /tmp/ccd6I4I9.o
+ .text.run_color_batch_compact
+                0x0000000000000dc0     0x1318 /tmp/ccd6I4I9.o
+ .text          0x00000000000020d8        0x0 /opt/ps3dev-gcc13/spu/lib/libsputhread.a(spu_thread_exit.o)
+ .text.spu_thread_exit
+                0x00000000000020d8       0x18 /opt/ps3dev-gcc13/spu/lib/libsputhread.a(spu_thread_exit.o)
+                0x00000000000020d8                spu_thread_exit
+ .text          0x00000000000020f0        0x0 /opt/ps3dev-gcc13/spu/lib/libsputhread.a(spu_thread_send_event.o)
+ .text.spu_thread_send_event
+                0x00000000000020f0       0x68 /opt/ps3dev-gcc13/spu/lib/libsputhread.a(spu_thread_send_event.o)
+                0x00000000000020f0                spu_thread_send_event
+ .text          0x0000000000002158        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-atexit.o)
+ .text.atexit   0x0000000000002158       0x30 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-atexit.o)
+                0x0000000000002158                atexit
+ .text          0x0000000000002188        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-exit.o)
+ .text          0x0000000000002188        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-impure.o)
+ .text          0x0000000000002188        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-__atexit.o)
+ .text.__register_exitproc
+                0x0000000000002188      0x148 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-__atexit.o)
+                0x0000000000002188                __register_exitproc
+ .text          0x00000000000022d0        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-__call_atexit.o)
+ .text.__call_exitprocs
+                0x00000000000022d0      0x250 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-__call_atexit.o)
+                0x00000000000022d0                __call_exitprocs
+ .text          0x0000000000002520       0x30 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libgloss.a(exit.o)
+                0x0000000000002520                _exit
+ .text          0x0000000000002550       0x80 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/crtend.o
+ .text          0x00000000000025d0        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/crtn.o
+ *(.gnu.warning)
+
+.fini           0x00000000000025d0       0x1c
+ *(.fini)
+ .fini          0x00000000000025d0        0xc /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/crti.o
+                0x00000000000025d0                _fini
+ .fini          0x00000000000025dc        0x4 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/crtbegin.o
+ .fini          0x00000000000025e0        0xc /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/crtn.o
+                0x00000000000025ec                PROVIDE (__etext, .)
+                0x00000000000025ec                PROVIDE (_etext, .)
+                0x00000000000025ec                PROVIDE (etext, .)
+
+.rodata         0x00000000000025f0       0xa0
+ *(.rodata .rodata.* .gnu.linkonce.r.*)
+ .rodata.run_color_batch_compact.cst16
+                0x00000000000025f0       0x90 /tmp/ccd6I4I9.o
+ .rodata.str1.16
+                0x0000000000002680       0x10 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-impure.o)
+
+.rodata1
+ *(.rodata1)
+
+.fixup          0x0000000000002690        0x0
+                0x0000000000002690                PROVIDE (__fixup_start, .)
+ *(.fixup)
+
+.eh_frame_hdr
+ *(.eh_frame_hdr)
+
+.eh_frame
+ *(.eh_frame)
+
+.gcc_except_table
+ *(.gcc_except_table .gcc_except_table.*)
+
+.exception_ranges
+ *(.exception_ranges .exception_ranges*)
+                0x0000000000002700                . = ALIGN (0x80)
+
+.eh_frame
+ *(.eh_frame)
+
+.gcc_except_table
+ *(.gcc_except_table .gcc_except_table.*)
+
+.exception_ranges
+ *(.exception_ranges .exception_ranges*)
+
+.tdata
+ *(.tdata .tdata.* .gnu.linkonce.td.*)
+
+.tbss
+ *(.tbss .tbss.* .gnu.linkonce.tb.*)
+ *(.tcommon)
+
+.preinit_array  0x0000000000002700        0x0
+                0x0000000000002700                PROVIDE (__preinit_array_start, .)
+ *(.preinit_array)
+                0x0000000000002700                PROVIDE (__preinit_array_end, .)
+
+.init_array     0x0000000000002700        0x0
+                0x0000000000002700                PROVIDE (__init_array_start, .)
+ *(SORT(.init_array.*))
+ *(.init_array)
+                0x0000000000002700                PROVIDE (__init_array_end, .)
+
+.fini_array     0x0000000000002700        0x0
+                0x0000000000002700                PROVIDE (__fini_array_start, .)
+ *(SORT(.fini_array.*))
+ *(.fini_array)
+                0x0000000000002700                PROVIDE (__fini_array_end, .)
+
+.ctors          0x0000000000002700        0x8
+ *crtbegin.o(.ctors)
+ .ctors         0x0000000000002700        0x4 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/crtbegin.o
+ *crtbegin?.o(.ctors)
+ *(EXCLUDE_FILE(*crtend?.o *crtend.o) .ctors)
+ *(SORT(.ctors.*))
+ *(.ctors)
+ .ctors         0x0000000000002704        0x4 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/crtend.o
+
+.dtors          0x0000000000002708        0x8
+ *crtbegin.o(.dtors)
+ .dtors         0x0000000000002708        0x4 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/crtbegin.o
+ *crtbegin?.o(.dtors)
+ *(EXCLUDE_FILE(*crtend?.o *crtend.o) .dtors)
+ *(SORT(.dtors.*))
+ *(.dtors)
+ .dtors         0x000000000000270c        0x4 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/crtend.o
+                0x000000000000270c                __DTOR_END__
+
+.jcr
+ *(.jcr)
+
+.data.rel.ro    0x0000000000002710       0x10
+ *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*)
+ *(.data.rel.ro* .gnu.linkonce.d.rel.ro.*)
+ .data.rel.ro._global_impure_ptr
+                0x0000000000002710       0x10 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-impure.o)
+                0x0000000000002710                _global_impure_ptr
+
+.dynamic
+ *(.dynamic)
+
+.got
+ *(.got.plt)
+ *(.igot.plt)
+ *(.got)
+ *(.igot)
+
+.data           0x0000000000002720      0x330
+ *(.data .data.* .gnu.linkonce.d.*)
+ .data          0x0000000000002720        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/crt1.o
+ .data          0x0000000000002720        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/crti.o
+ .data          0x0000000000002720       0x10 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/crtbegin.o
+                0x0000000000002720                __dso_handle
+ .data          0x0000000000002730        0x0 /tmp/ccd6I4I9.o
+ .data.g_v1f1_debug_first_job
+                0x0000000000002730       0x10 /tmp/ccd6I4I9.o
+ .data          0x0000000000002740        0x0 /opt/ps3dev-gcc13/spu/lib/libsputhread.a(spu_thread_exit.o)
+ .data          0x0000000000002740        0x0 /opt/ps3dev-gcc13/spu/lib/libsputhread.a(spu_thread_send_event.o)
+ .data          0x0000000000002740        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-atexit.o)
+ .data          0x0000000000002740        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-exit.o)
+ .data          0x0000000000002740        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-impure.o)
+ .data.rel._impure_ptr
+                0x0000000000002740       0x10 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-impure.o)
+                0x0000000000002740                _impure_ptr
+ .data.rel._impure_data
+                0x0000000000002750      0x300 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-impure.o)
+                0x0000000000002750                _impure_data
+ .data          0x0000000000002a50        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-__atexit.o)
+ .data          0x0000000000002a50        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-__call_atexit.o)
+ .data          0x0000000000002a50        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libgloss.a(exit.o)
+ .data          0x0000000000002a50        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/crtend.o
+ .data          0x0000000000002a50        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/crtn.o
+
+.tm_clone_table
+                0x0000000000002a50        0x0
+ .tm_clone_table
+                0x0000000000002a50        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/crtbegin.o
+ .tm_clone_table
+                0x0000000000002a50        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/crtend.o
+
+.data1
+ *(.data1)
+                0x0000000000002a50                _edata = .
+                0x0000000000002a50                PROVIDE (edata, .)
+                0x0000000000002a50                __bss_start = .
+
+.bss            0x0000000000002a80      0xb90
+ *(.dynbss)
+ *(.bss .bss.* .gnu.linkonce.b.*)
+ .bss           0x0000000000002a80        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/crt1.o
+ .bss           0x0000000000002a80        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/crti.o
+ .bss           0x0000000000002a80       0x20 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/crtbegin.o
+ .bss           0x0000000000002aa0        0x0 /tmp/ccd6I4I9.o
+ .bss.g_color_done_block
+                0x0000000000002aa0       0x10 /tmp/ccd6I4I9.o
+ .bss.g_v1f1_debug_block
+                0x0000000000002ab0       0x10 /tmp/ccd6I4I9.o
+ *fill*         0x0000000000002ac0       0x40 00
+ .bss.g_color_result_batch
+                0x0000000000002b00      0x200 /tmp/ccd6I4I9.o
+ .bss.g_color_batch
+                0x0000000000002d00      0x880 /tmp/ccd6I4I9.o
+ .bss.g_dma_block
+                0x0000000000003580       0x80 /tmp/ccd6I4I9.o
+ .bss           0x0000000000003600        0x0 /opt/ps3dev-gcc13/spu/lib/libsputhread.a(spu_thread_exit.o)
+ .bss           0x0000000000003600        0x0 /opt/ps3dev-gcc13/spu/lib/libsputhread.a(spu_thread_send_event.o)
+ .bss           0x0000000000003600        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-atexit.o)
+ .bss           0x0000000000003600        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-exit.o)
+ .bss           0x0000000000003600        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-impure.o)
+ .bss           0x0000000000003600        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-__atexit.o)
+ .bss           0x0000000000003600        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-__call_atexit.o)
+ .bss           0x0000000000003600        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libgloss.a(exit.o)
+ .bss           0x0000000000003600        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/crtend.o
+ .bss           0x0000000000003600        0x0 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/crtn.o
+ *(COMMON)
+ COMMON         0x0000000000003600       0x10 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/crt1.o
+                0x0000000000003600                __ea_local_store
+                0x0000000000003610                . = ALIGN ((. != 0x0)?0x10:0x1)
+
+.toe
+ *(.toe)
+                0x0000000000003610                . = ALIGN (0x10)
+                0x0000000000003610                . = ALIGN (0x10)
+                0x000000000003fff0                PROVIDE (__stack, 0x3fff0)
+                0x0000000000003610                _end = .
+                0x0000000000003610                PROVIDE (end, .)
+
+.stab
+ *(.stab)
+
+.stabstr
+ *(.stabstr)
+
+.stab.excl
+ *(.stab.excl)
+
+.stab.exclstr
+ *(.stab.exclstr)
+
+.stab.index
+ *(.stab.index)
+
+.stab.indexstr
+ *(.stab.indexstr)
+
+.comment        0x0000000000000000       0x11
+ *(.comment)
+ .comment       0x0000000000000000       0x11 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/crtbegin.o
+                                         0x12 (size before relaxing)
+ .comment       0x0000000000000000       0x12 /tmp/ccd6I4I9.o
+ .comment       0x0000000000000000       0x12 /opt/ps3dev-gcc13/spu/lib/libsputhread.a(spu_thread_exit.o)
+ .comment       0x0000000000000000       0x12 /opt/ps3dev-gcc13/spu/lib/libsputhread.a(spu_thread_send_event.o)
+ .comment       0x0000000000000000       0x12 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-atexit.o)
+ .comment       0x0000000000000000       0x12 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-exit.o)
+ .comment       0x0000000000000000       0x12 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-impure.o)
+ .comment       0x0000000000000000       0x12 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-__atexit.o)
+ .comment       0x0000000000000000       0x12 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libc.a(lib_a-__call_atexit.o)
+ .comment       0x0000000000000000       0x12 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/libgloss.a(exit.o)
+ .comment       0x0000000000000000       0x12 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/crtend.o
+
+.debug
+ *(.debug)
+
+.line
+ *(.line)
+
+.debug_srcinfo
+ *(.debug_srcinfo)
+
+.debug_sfnames
+ *(.debug_sfnames)
+
+.debug_aranges
+ *(.debug_aranges)
+
+.debug_pubnames
+ *(.debug_pubnames)
+
+.debug_info
+ *(.debug_info .gnu.linkonce.wi.*)
+
+.debug_abbrev
+ *(.debug_abbrev)
+
+.debug_line
+ *(.debug_line)
+
+.debug_frame
+ *(.debug_frame)
+
+.debug_str
+ *(.debug_str)
+
+.debug_loc
+ *(.debug_loc)
+
+.debug_macinfo
+ *(.debug_macinfo)
+
+.debug_weaknames
+ *(.debug_weaknames)
+
+.debug_funcnames
+ *(.debug_funcnames)
+
+.debug_typenames
+ *(.debug_typenames)
+
+.debug_varnames
+ *(.debug_varnames)
+
+.debug_pubtypes
+ *(.debug_pubtypes)
+
+.debug_ranges
+ *(.debug_ranges)
+
+.gnu.attributes
+ *(.gnu.attributes)
+
+.note.spu_name  0x0000000000000000       0x30
+ *(.note.spu_name)
+ .note.spu_name
+                0x0000000000000000       0x30 /opt/ps3dev-gcc13/spu/lib/gcc/spu/9.5.0/../../../../spu/lib/crt1.o
+
+._ea
+ *(._ea)
+ *(._ea.*)
+
+/DISCARD/
+ *(.note.GNU-stack)
+ *(.gnu_debuglink)
+ *(.gnu.lto_*)
+OUTPUT(ps3_sprite_worker_spu.elf elf32-spu)

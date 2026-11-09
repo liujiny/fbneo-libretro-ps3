@@ -8,6 +8,23 @@
 #include "serflash.h"
 #include "rtc9701.h"
 #include "ymz770.h"
+#include "burn_endian.h"
+#ifdef __PS3__
+#include "ps3_memory_pool.h"
+#include "ps3_benchmark.h"
+#endif
+
+#ifdef SH3_STATIC_REC
+extern "C" {
+	extern uint8_t *g_main_ram;
+	extern uint8_t *g_main_rom;
+	extern uint8_t *g_cache_ram;
+	extern void sh3_init_dispatch_table(void);
+	extern int g_sh3_static_rec_enabled;
+	extern uint32_t g_inputs[4];
+	extern uint8_t  g_dips[4];
+}
+#endif
 
 #define SH3_CLOCK (12800000 * 8)
 
@@ -23,12 +40,11 @@ static UINT8 *DrvSoundROM;
 static UINT8 *DrvMainRAM;
 static UINT8 *DrvCacheRAM;
 #ifdef __PS3__
-#if 0
-static const char *Cv1kFlashPath = /dev_hdd0/tmp/fbneo-cv1k-flash.bin;
+static char Cv1kFlashPathDynamic[128];
+static const char Cv1kFlashPathPrimary[] = "/dev_hdd0/tmp/fbneo-cv1k-flash.bin";
+static const char Cv1kFlashPathFallback[] = "/dev_hdd0/game/FBNE00005/USRDIR/fbneo-cv1k-flash.bin";
+static const char *Cv1kFlashPath = Cv1kFlashPathPrimary;
 #endif
-
-#endif
-static const char Cv1kFlashPath[] = {'/','d','e','v','_','h','d','d','0','/','g','a','m','e','/','F','B','N','E','0','0','0','0','5','/','U','S','R','D','I','R','/','f','b','n','e','o','-','c','v','1','k','-','f','l','a','s','h','.','b','i','n',0};
 static UINT8 DrvRecalc;
 
 static INT32 nExtraCycles[1];
@@ -203,9 +219,91 @@ static struct BurnDIPInfo Cv1ksDIPList[]=
 STDDIPINFOEXT(Cv1k, Cv1k, Default)
 STDDIPINFOEXT(Cv1ks, Cv1ks, Default)
 
+static INT32 Cv1kBootDIPInfo(struct BurnDIPInfo* pdi, UINT32 i)
+{
+	const unsigned base = sizeof(Cv1kDIPList) / sizeof(Cv1kDIPList[0]) + sizeof(DefaultDIPList) / sizeof(DefaultDIPList[0]);
+	static const BurnDIPInfo boot[] = {
+		{0, 0xfe, 0, 2, "Skip Startup RAM Test (restart)"},
+		{0x03, 0x01, 0x40, 0x00, "On"},
+		{0x03, 0x01, 0x40, 0x40, "Off"}
+	};
+	if (i >= base) {
+		if (i - base >= sizeof(boot) / sizeof(boot[0])) return 1;
+		if (pdi) *pdi = boot[i - base];
+		return 0;
+	}
+	return Cv1kDIPInfo(pdi, i);
+}
+
+#ifdef __PS3__
+/* Distinct read addresses seen through the driver handler, with the last value
+ * and a hit count. Used to compare interpreter vs DRC polling behaviour. */
+struct Ps3DbgRead { UINT32 addr, value, count; };
+static Ps3DbgRead ps3_dbg_read_table[24];
+static unsigned ps3_dbg_read_entries;
+void ps3_cv1k_note_read(UINT32 addr, UINT32 value)
+{
+ unsigned i;
+ for (i = 0; i < ps3_dbg_read_entries; i++)
+  if (ps3_dbg_read_table[i].addr == addr) {
+   ++ps3_dbg_read_table[i].count;
+   ps3_dbg_read_table[i].value = value;
+   return;
+  }
+ if (ps3_dbg_read_entries < 24) {
+  ps3_dbg_read_table[ps3_dbg_read_entries].addr = addr;
+  ps3_dbg_read_table[ps3_dbg_read_entries].value = value;
+  ps3_dbg_read_table[ps3_dbg_read_entries].count = 1;
+  ++ps3_dbg_read_entries;
+ }
+}
+void ps3_cv1k_log_reads(unsigned frame)
+{
+ unsigned i;
+ ps3_mem_diag_print("reads f=%u distinct=%u", frame, ps3_dbg_read_entries);
+ for (i = 0; i < ps3_dbg_read_entries && i < 12; i++)
+  ps3_mem_diag_print("  rd %08x val=%08x n=%u", ps3_dbg_read_table[i].addr,
+   ps3_dbg_read_table[i].value, ps3_dbg_read_table[i].count);
+}
+#endif
+
+#ifdef __PS3__
+/* Per-frame CPU work: cycles the SH3 actually consumed versus the budget, plus
+ * the dispatcher rate. A stuck wait loop shows up as a huge dispatch count with
+ * the cycle budget still being spent normally. */
+unsigned ps3_dbg_drv_cycles, ps3_dbg_drv_dispatches, ps3_dbg_drv_frames;
+void ps3_cv1k_log_cycles(unsigned frame, INT32 cycles_done, INT32 cycles_total)
+{
+ static unsigned last_disp;
+#ifdef SH3_PPC_DRC
+ unsigned d = sh3_dbg_dispatches;
+#else
+ unsigned d = 0;
+#endif
+ ps3_mem_diag_print("cyc f=%u done=%d total=%d disp=%u(+%u)",
+  frame, (int)cycles_done, (int)cycles_total, d, d - last_disp);
+ last_disp = d;
+}
+#endif
+
+#ifdef __PS3__
+unsigned ps3_dbg_blit_writes = 0;
+unsigned ps3_dbg_iow_writes = 0;
+void ps3_cv1k_log_blit(unsigned frame)
+{
+ static unsigned last;
+ ps3_mem_diag_print("blit f=%u writes=%u(+%u)", frame, ps3_dbg_blit_writes,
+  ps3_dbg_blit_writes - last);
+ last = ps3_dbg_blit_writes;
+}
+#endif
+
 static void __fastcall main_write_long(UINT32 offset, UINT32 data)
 {
 	if ((offset & 0xffffff80) == 0x18000000) { // 0x18000000 - 0x18000057
+#ifdef __PS3__
+		++ps3_dbg_blit_writes;
+#endif
 		epic12_blitter_write(offset & 0xff, data);
 		return;
 	}
@@ -250,7 +348,15 @@ static void __fastcall main_write_byte(UINT32 offset, UINT8 data)
 static UINT32 __fastcall main_read_long(UINT32 offset)
 {
 	if ((offset & 0xffffff80) == 0x18000000) {
+#ifdef __PS3__
+		{
+			const UINT32 v = epic12_blitter_read(offset & 0xff);
+			ps3_cv1k_note_read(offset, v);
+			return v;
+		}
+#else
 		return epic12_blitter_read(offset & 0xff);
+#endif
 	}
 
 	//bprintf(0, _T("mrl %x\n"), offset);
@@ -320,23 +426,23 @@ static UINT32 __fastcall speedhack_read_long(UINT32 offset)
 {
 	UINT32 pc = Sh3GetPC(-1);
 	if ( offset == hacky_idle_ram && (pc == hacky_idle_pc || pc == hacky_idle_pc+2)) {
-		//bprintf(0, _T("l"));
-		Sh3BurnCycles(speedhack_burn);
+		INT32 rem = Sh3GetRemainingCycles();
+		Sh3BurnCycles(rem > 0 ? rem : speedhack_burn);
 	}
 	UINT32 V = *((UINT32 *)(DrvMainRAM + (offset & 0xfffffc)));
+#ifdef LSB_FIRST
 	V = (V << 16) | (V >> 16);
+#endif
 	return V;
 }
 
 static UINT16 __fastcall speedhack_read_word(UINT32 offset)
 {
 #if 0
-	// speedhack for all games uses long handler, just passthru for word/byte
-	// reads since this is a high-traffic area. (0xc000000 - 0xc00ffff)
 	UINT32 pc = Sh3GetPC(-1);
 	if ( offset == hacky_idle_ram && (pc == hacky_idle_pc || pc == hacky_idle_pc+2)) {
-		//bprintf(0, _T("w"));
-		Sh3BurnCycles(speedhack_burn);
+		INT32 rem = Sh3GetRemainingCycles();
+		Sh3BurnCycles(rem > 0 ? rem : speedhack_burn);
 	}
 #endif
 	return *((UINT16 *)(DrvMainRAM + (offset & 0xfffffe)));
@@ -347,11 +453,15 @@ static UINT8 __fastcall speedhack_read_byte(UINT32 offset)
 #if 0
 	UINT32 pc = Sh3GetPC(-1);
 	if ( offset == hacky_idle_ram && (pc == hacky_idle_pc || pc == hacky_idle_pc+2)) {
-		//bprintf(0, _T("b"));
-		Sh3BurnCycles(speedhack_burn);
+		INT32 rem = Sh3GetRemainingCycles();
+		Sh3BurnCycles(rem > 0 ? rem : speedhack_burn);
 	}
 #endif
-	return DrvMainRAM[(offset & 0xffffff) ^ 1];
+	offset &= 0xffffff;
+#ifdef LSB_FIRST
+	offset ^= 1;
+#endif
+	return DrvMainRAM[offset];
 }
 
 static void speedhack_set(UINT32 ram, UINT32 pc)
@@ -363,7 +473,17 @@ static void speedhack_set(UINT32 ram, UINT32 pc)
 	Sh3SetReadByteHandler (1, speedhack_read_byte);
 	Sh3SetReadWordHandler (1, speedhack_read_word);
 	Sh3SetReadLongHandler (1, speedhack_read_long);
+
+#if defined(__PS3__) || defined(_XBOX) || defined(SH3_PPC_DRC_TEST)
+	/* Tell the DRC about the one RAM page whose read handler is side-effect
+	 * free except for the watched longword, and about the idle loop it may
+	 * fast-forward. */
+	Sh3SetDrcReadMirror(DrvMainRAM, 0x0c000000, hacky_idle_ram, 1);
+	Sh3SetDrcIdleWatch(&hacky_idle_ram, &hacky_idle_pc);
+#endif
 }
+
+#include "cv1k_fastboot.h"
 
 static INT32 DrvDoReset()
 {
@@ -372,6 +492,7 @@ static INT32 DrvDoReset()
 	Sh3Open(0);
 	Sh3Reset();
 	Sh3Close();
+	cv1k_boot_prepare();
 
 	epic12_reset();
 	serflash_reset();
@@ -426,22 +547,75 @@ static INT32 DrvLoadRoms()
 	if (BurnLoadRom(DrvMainROM,  0, 1)) return 1;
 	if (ri.nLen == 0x200000) memcpy (DrvMainROM + 0x200000, DrvMainROM, 0x200000);
 	//if (ri.nLen >= 0x400000) type_d = 1;
+#ifndef LSB_FIRST
+	// Program dumps store each instruction low byte first; SH3 fetches native
+	// 16-bit words. Convert once for PowerPC instead of executing swapped opcodes.
+	BurnByteswap(DrvMainROM, 0x400000);
+#endif
 
 #ifdef __PS3__
-#if 0
-	FILE *fp = fopen(Cv1kFlashPath, wb);
-#endif
-	const char mode[] = {'w','b',0};
-	FILE *fp = fopen(Cv1kFlashPath, mode);
-	UINT8 *chunk = (UINT8*)BurnMalloc(0x10000);
-	if (!fp || !chunk || !BurnExtLoadRomChunk) return 1;
-	for (UINT32 offset = 0; offset < 0x8400000; offset += 0x10000) {
-		INT32 wrote = 0;
-		if (BurnExtLoadRomChunk(chunk, &wrote, 1, offset, 0x10000) || wrote != 0x10000) return 1;
-		if (fwrite(chunk, 1, 0x10000, fp) != 0x10000) return 1;
+	bool need_extract = true;
+	snprintf(Cv1kFlashPathDynamic, sizeof(Cv1kFlashPathDynamic), "/dev_hdd0/tmp/fbneo-cv1k-%s-flash.bin", BurnDrvGetTextA(DRV_NAME));
+	FILE *fp_check = fopen(Cv1kFlashPathDynamic, "rb");
+	if (fp_check) {
+		fseek(fp_check, 0, SEEK_END);
+		if (ftell(fp_check) == 0x8400000) {
+			need_extract = false;
+			Cv1kFlashPath = Cv1kFlashPathDynamic;
+		}
+		fclose(fp_check);
 	}
-	fclose(fp);
-	BurnFree(chunk);
+	if (need_extract && strcmp(BurnDrvGetTextA(DRV_NAME), "ddpdfk") == 0) {
+		fp_check = fopen(Cv1kFlashPathPrimary, "rb");
+		if (fp_check) {
+			fseek(fp_check, 0, SEEK_END);
+			if (ftell(fp_check) == 0x8400000) {
+				need_extract = false;
+				Cv1kFlashPath = Cv1kFlashPathPrimary;
+			}
+			fclose(fp_check);
+		}
+		if (need_extract) {
+			fp_check = fopen(Cv1kFlashPathFallback, "rb");
+			if (fp_check) {
+				fseek(fp_check, 0, SEEK_END);
+				if (ftell(fp_check) == 0x8400000) {
+					need_extract = false;
+					Cv1kFlashPath = Cv1kFlashPathFallback;
+				}
+				fclose(fp_check);
+			}
+		}
+	}
+
+	if (need_extract) {
+		Cv1kFlashPath = Cv1kFlashPathDynamic;
+		ps3_mem_diag_print("[CV1K] extracting flash to %s...\n", Cv1kFlashPath);
+		const char mode[] = {'w','b',0};
+		FILE *fp = fopen(Cv1kFlashPath, mode);
+		UINT8 *chunk = (UINT8*)BurnMalloc(0x10000);
+		if (!fp || !chunk || !BurnExtLoadRomChunk) {
+			if (fp) fclose(fp);
+			if (chunk) BurnFree(chunk);
+			return 1;
+		}
+		for (UINT32 offset = 0; offset < 0x8400000; offset += 0x10000) {
+			INT32 wrote = 0;
+			if (BurnExtLoadRomChunk(chunk, &wrote, 1, offset, 0x10000) || wrote != 0x10000) {
+				fclose(fp);
+				BurnFree(chunk);
+				return 1;
+			}
+			if (fwrite(chunk, 1, 0x10000, fp) != 0x10000) {
+				fclose(fp);
+				BurnFree(chunk);
+				return 1;
+			}
+		}
+		fclose(fp);
+		BurnFree(chunk);
+		ps3_mem_diag_print("[CV1K] flash extraction complete\n");
+	}
 #else
 	if (BurnLoadRom(DrvFlashROM, 1, 1)) return 1;
 #endif
@@ -505,7 +679,7 @@ static INT32 DrvInit()
 {
 	struct BurnRomInfo ri;
 	BurnDrvGetRomInfo(&ri, 0);
-	if (ri.nLen >= 0x400000) is_type_d = 1;
+	is_type_d = (ri.nLen >= 0x400000) ? 1 : 0;
 
 	BurnAllocMemIndex();
 	GenericTilesInit();
@@ -536,6 +710,19 @@ static INT32 DrvInit()
 
 	init_speedhack(); // install the hacky speedhack handler
 
+#if defined(__PS3__) || defined(_XBOX) || defined(SH3_PPC_DRC_TEST)
+#if defined(__PS3__) || defined(_XBOX) || defined(SH3_PPC_DRC_TEST)
+	/* Reserve the JIT tables before the driver allocates VRAM: after that there
+	 * is not enough free memory for calloc and the DRC degrades to the
+	 * interpreter without saying so. */
+	Sh3DrcPreallocate();
+#endif
+	Sh3SetDrcRam(DrvMainRAM, 0x0c000000, 0x1000000, is_type_d ? 0x1000000 : 0x800000);
+	/* CV1000 polls the blitter busy bit and DMA channel 0 constantly. */
+	Sh3SetDrcDeviceRead(0, 0x18000010, 0);
+	Sh3SetDrcDeviceRead(1, 0x0400002c, 7);
+#endif
+
 	Sh3Close();
 
 	epic12_init((is_type_d) ? 0x1000000 : 0x0800000, (UINT16*)DrvMainRAM, &DrvDips[0]);
@@ -549,6 +736,20 @@ static INT32 DrvInit()
 	ymz770_init(DrvSoundROM, 0x800000);
 	ymz770_set_volume(2.0);
 	ymz770_set_buffered(Sh3TotalCycles, SH3_CLOCK);
+
+#ifdef SH3_STATIC_REC
+	if (BurnDrvGetTextA(DRV_NAME) && (strcmp(BurnDrvGetTextA(DRV_NAME), "ddpdfk") == 0 || strcmp(BurnDrvGetTextA(DRV_NAME), "mmpork") == 0)) {
+		g_main_ram = DrvMainRAM;
+		g_main_rom = DrvMainROM;
+		g_cache_ram = DrvCacheRAM;
+		sh3_init_dispatch_table();
+		g_sh3_static_rec_enabled = 1;
+		bprintf(0, _T("[SH3REC] %s Static Recompiler Active!\n"), BurnDrvGetTextA(DRV_NAME));
+	} else {
+		g_sh3_static_rec_enabled = 0;
+	}
+#endif
+
 	DrvDoReset();
 
 	return 0;
@@ -556,6 +757,9 @@ static INT32 DrvInit()
 
 static INT32 DrvExit()
 {
+#ifdef SH3_STATIC_REC
+	g_sh3_static_rec_enabled = 0;
+#endif
 	Sh3Exit();
 
 	epic12_exit();
@@ -578,15 +782,27 @@ static INT32 DrvDraw()
 	return 0;
 }
 
+#if defined(__PS3__)
+static inline unsigned long long ps3_cv1k_tb(void)
+{
+	unsigned long long v;
+	__asm__ __volatile__("mftb %0" : "=r"(v));
+	return v;
+}
+#endif
 static INT32 DrvFrame()
 {
 #ifdef __PS3__
-	static INT32 ps3_first_frame_probe = 1;
-	if (ps3_first_frame_probe) bprintf(0, _T("[FBNeo][CV1K] first frame: enter DrvFrame\n"));
+	static INT32 ps3_cv1k_frame_count = 0;
+	if (ps3_cv1k_frame_count < 10 || (ps3_cv1k_frame_count % 60) == 0) {
+		ps3_mem_diag_print("[CV1K FRAME %d] enter DrvFrame\n", ps3_cv1k_frame_count);
+	}
 #endif
 	if (DrvReset) {
 		DrvDoReset();
 	}
+
+	cv1k_boot_step();
 
 	// check if cpu rate changes here..
 	if (nPrevBurnCPUSpeedAdjust != nBurnCPUSpeedAdjust || DrvDips[3] != nPrevCPUTenth) {
@@ -619,6 +835,9 @@ static INT32 DrvFrame()
 		epic12_set_blitterthreading(DrvDips[1] & 1);
 #endif
 		Sh3SetTimerGranularity(DrvDips[1] & 2);
+#if defined(__PS3__) || defined(_XBOX) || defined(SH3_PPC_DRC_TEST)
+		Sh3SetDrc(!(DrvDips[3] & 0x10));
+#endif
 
 		// test stuff for el_rika
 		epic12_set_blitter_clipping_margin(!(DrvDips[2] & 0x40));
@@ -638,42 +857,77 @@ static INT32 DrvFrame()
 			DrvInputs[3] ^= (DrvJoy4[i] & 1) << i;
 		}
 
-		hold_coin.checklow(0, DrvInputs[0], 1<<2, 2);
-		hold_coin.checklow(1, DrvInputs[0], 1<<3, 2);
+		hold_coin.checklow(0, DrvInputs[0], 1<<2, 8);
+		hold_coin.checklow(1, DrvInputs[0], 1<<3, 8);
 	}
 
-	Sh3NewFrame();
-#ifdef __PS3__
-	if (ps3_first_frame_probe) bprintf(0, _T("[FBNeo][CV1K] first frame: before SH3 run\n"));
+#ifdef SH3_STATIC_REC
+	if (g_sh3_static_rec_enabled) {
+		g_inputs[0] = DrvInputs[0];
+		g_inputs[1] = DrvInputs[1];
+		g_inputs[2] = DrvInputs[2];
+		g_inputs[3] = DrvInputs[3];
+		g_dips[0]   = DrvDips[0];
+		g_dips[1]   = DrvDips[1];
+		g_dips[2]   = DrvDips[2];
+		g_dips[3]   = DrvDips[3];
+	}
 #endif
 
-	INT32 nInterleave = 240;
+	Sh3NewFrame();
+
+	/* Salvia's CV1000 measurement: Cave hardware has no per-scanline interrupt, the
+	 * only raster IRQ is VBLANK, so the 240-slice interleave only pays dispatcher
+	 * teardown and short-budget interpreter fallbacks 240 times a frame. 60 slices
+	 * (4 scanlines, 28,444 cycles each) cut those transitions by 75% and let blocks
+	 * chain for four times longer. */
+	INT32 nInterleave = 60;
 	INT32 nCyclesTotal[1] = { DriverClock / 60 };
 	INT32 nCyclesDone[1] = { nExtraCycles[0] };
 
 	Sh3Open(0);
 
+	ps3_bench_phase_begin(0);
+#if defined(__PS3__)
+	unsigned long long ps3_run_t0 = ps3_cv1k_tb();
+#endif
 	for (INT32 i = 0; i < nInterleave; i++)
 	{
 		CPU_RUN(0, Sh3);
-		#ifdef __PS3__
-		if (ps3_first_frame_probe && (i == 0 || i == 59 || i == 119 || i == 179 || i == 239)) bprintf(0, _T("[FBNeo][CV1K] first frame: SH3 slice %d/240 complete\n"), i + 1);
-		#endif
+#ifdef __PS3__
+		if (ps3_cv1k_frame_count < 2 && (i == 0 || i == 59 || i == 119 || i == 179 || i == 239)) {
+			ps3_mem_diag_print("[CV1K] frame %d: SH3 slice %d/240 complete\n", ps3_cv1k_frame_count, i + 1);
+		}
+#endif
 	}
 
 	Sh3SetIRQLine(2, CPU_IRQSTATUS_HOLD);
 
+	ps3_bench_phase_end(0);
+#if defined(__PS3__)
+	{
+		static unsigned long long run_ticks = 0;
+		const unsigned long long now = ps3_cv1k_tb();
+		run_ticks += now - ps3_run_t0;
+		if ((ps3_cv1k_frame_count % 60) == 0)
+			ps3_mem_diag_print("[CV1K RUN] f=%d run_us=%u", (int)ps3_cv1k_frame_count, (unsigned)(run_ticks / 79.8));
+	}
+#endif
+
 	if (pBurnSoundOut) {
-		#ifdef __PS3__
-		if (ps3_first_frame_probe) bprintf(0, _T("[FBNeo][CV1K] first frame: before YMZ770\n"));
-		#endif
+		ps3_bench_phase_begin(1);
 		ymz770_update(pBurnSoundOut, nBurnSoundLen);
-		#ifdef __PS3__
-		if (ps3_first_frame_probe) bprintf(0, _T("[FBNeo][CV1K] first frame: after YMZ770\n"));
-		#endif
+		ps3_bench_phase_end(1);
 	}
 
 	nExtraCycles[0] = nCyclesDone[0] - nCyclesTotal[0];
+#ifdef __PS3__
+	/* A translated closed loop can overshoot its slice; carrying the whole
+	 * overshoot starves the following frames for minutes. Clamp the debt to one
+	 * frame so progress resumes immediately. */
+	if (nExtraCycles[0] >  nCyclesTotal[0]) nExtraCycles[0] =  nCyclesTotal[0];
+	if (nExtraCycles[0] < -nCyclesTotal[0]) nExtraCycles[0] = -nCyclesTotal[0];
+#endif
 
 	Sh3Close();
 
@@ -684,20 +938,45 @@ static INT32 DrvFrame()
 	}
 
 	if (pBurnDraw) {
-		#ifdef __PS3__
-		if (ps3_first_frame_probe) bprintf(0, _T("[FBNeo][CV1K] first frame: before redraw\n"));
-		#endif
+#ifdef __PS3__
+		if (ps3_cv1k_frame_count < 10) {
+			ps3_mem_diag_print("[CV1K FRAME %d] before redraw\n", ps3_cv1k_frame_count);
+		}
+#endif
+		ps3_bench_phase_begin(2);
 		BurnDrvRedraw();
-		#ifdef __PS3__
-		if (ps3_first_frame_probe) bprintf(0, _T("[FBNeo][CV1K] first frame: after redraw\n"));
-		#endif
+		ps3_bench_phase_end(2);
+#ifdef __PS3__
+		if (ps3_cv1k_frame_count < 10) {
+			ps3_mem_diag_print("[CV1K FRAME %d] after redraw\n", ps3_cv1k_frame_count);
+		}
+#endif
 	}
 
 #ifdef __PS3__
-	if (ps3_first_frame_probe) {
-		bprintf(0, _T("[FBNeo][CV1K] first frame: complete\n"));
-		ps3_first_frame_probe = 0;
+	ps3_cv1k_frame_count++;
+#if defined(SH3_PPC_DRC_TEST) || defined(__PS3__)
+#ifdef SH3_PPC_DRC_TEST
+	if ((ps3_cv1k_frame_count % 60) == 0) Sh3DrcLogCounters((unsigned)ps3_cv1k_frame_count);
+#endif
+	if ((ps3_cv1k_frame_count % 60) == 0) ps3_cv1k_log_blit((unsigned)ps3_cv1k_frame_count);
+	{
+		static unsigned long long lb = 0, lpx = 0;
+		const unsigned long long b = epic12_GetBlitTicks();
+		const unsigned long long px = epic12_blit_pixels;
+		if ((ps3_cv1k_frame_count % 60) == 0) {
+			const unsigned long long dms = (b - lb) / 79800;      /* microseconds this window */
+			const unsigned long long dpx = px - lpx;
+			const unsigned long long cyc = (b - lb) * (unsigned long long)(3200000000ULL / 79800000ULL);
+			ps3_mem_diag_print("[CV1K BLIT] f=%d blit_us=%u px=%u cycles_per_px=%u calls=%u",
+				(int)ps3_cv1k_frame_count, (unsigned)dms, (unsigned)dpx,
+				(unsigned)(dpx ? cyc / dpx : 0), (unsigned)epic12_blit_calls);
+		}
+		lb = b; lpx = px;
 	}
+	if ((ps3_cv1k_frame_count % 60) == 0) ps3_cv1k_log_reads((unsigned)ps3_cv1k_frame_count);
+	if ((ps3_cv1k_frame_count % 60) == 0) ps3_cv1k_log_cycles((unsigned)ps3_cv1k_frame_count, nCyclesDone[0], nCyclesTotal[0]);
+#endif
 #endif
 
 	return 0;
@@ -1399,7 +1678,7 @@ struct BurnDriver BurnDrvDdpdfk = {
 	"DoDonPachi Dai-Fukkatsu Ver 1.5 (2008/06/23 MASTER VER 1.5)\0", NULL, "Cave (AMI license)", "CA019",
 	L"DoDonPachi Dai-Fukkatsu Ver 1.5\0\u6012\u9996\u9818\u8702 \u5927\u5fa9\u6d3b Ver 1.5 (2008/06/23 MASTER VER 1.5)\0", NULL, NULL, NULL,
 	BDF_GAME_WORKING | BDF_ORIENTATION_VERTICAL | BDF_HISCORE_SUPPORTED, 2, HARDWARE_CAVE_CV1000, GBF_VERSHOOT, FBF_DONPACHI,
-	NULL, ddpdfkRomInfo, ddpdfkRomName, NULL, NULL, NULL, NULL, Cv1kInputInfo, Cv1kDIPInfo,
+	NULL, ddpdfkRomInfo, ddpdfkRomName, NULL, NULL, NULL, NULL, Cv1kInputInfo, Cv1kBootDIPInfo,
 	DrvInit, DrvExit, DrvFrame, DrvDraw, DrvScan, &DrvRecalc, 0x10000,
 	240, 320, 3, 4
 };
@@ -1474,7 +1753,7 @@ struct BurnDriver BurnDrvDfkbl = {
 	"DoDonPachi Dai-Fukkatsu Black Label (2010/1/18 BLACK LABEL)\0", NULL, "Cave", "CA019B",
 	L"DoDonPachi Dai-Fukkatsu Black Label\0\u6012\u9996\u9818\u8702 \u5927\u5fa9\u6d3b (2010/1/18 BLACK LABEL)\0", NULL, NULL, NULL,
 	BDF_GAME_WORKING | BDF_ORIENTATION_VERTICAL | BDF_HISCORE_SUPPORTED, 2, HARDWARE_CAVE_CV1000, GBF_VERSHOOT, FBF_DONPACHI,
-	NULL, dfkblRomInfo, dfkblRomName, NULL, NULL, NULL, NULL, Cv1kInputInfo, Cv1kDIPInfo,
+	NULL, dfkblRomInfo, dfkblRomName, NULL, NULL, NULL, NULL, Cv1kInputInfo, Cv1kBootDIPInfo,
 	DrvInit, DrvExit, DrvFrame, DrvDraw, DrvScan, &DrvRecalc, 0x10000,
 	240, 320, 3, 4
 };
@@ -1499,7 +1778,7 @@ struct BurnDriver BurnDrvDdpsdoj = {
 	"DoDonPachi SaiDaiOuJou (2012/ 4/20)\0", NULL, "Cave", "CA???",
 	L"DoDonPachi SaiDaiOuJou\0\u6012\u9996\u9818\u8702 \u6700\u5927\u5f80\u751f (2012/4/20)\0", NULL, NULL, NULL,
 	BDF_GAME_WORKING | BDF_ORIENTATION_VERTICAL | BDF_HISCORE_SUPPORTED, 2, HARDWARE_CAVE_CV1000, GBF_VERSHOOT, FBF_DONPACHI,
-	NULL, ddpsdojRomInfo, ddpsdojRomName, NULL, NULL, NULL, NULL, Cv1kInputInfo, Cv1kDIPInfo,
+	NULL, ddpsdojRomInfo, ddpsdojRomName, NULL, NULL, NULL, NULL, Cv1kInputInfo, Cv1kBootDIPInfo,
 	DrvInit, DrvExit, DrvFrame, DrvDraw, DrvScan, &DrvRecalc, 0x10000,
 	240, 320, 3, 4
 };
