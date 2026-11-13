@@ -18,7 +18,7 @@ struct Sh3IdleCandidates {
               unsigned idle_ram,unsigned idle_pc,bool registered,bool delay,unsigned origin) {
   ++watched_movll;
   bool matches=registered && (address&0x1fffffffu)==idle_ram &&
-   (handler_pc==idle_pc || handler_pc==idle_pc+2u);
+   (handler_pc>=idle_pc && handler_pc<=idle_pc+10u);
   matching+=matches?1u:0u;
   unregistered+=registered?0u:1u;
   for(unsigned i=0;i<SITES;++i) {

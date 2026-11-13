@@ -425,7 +425,7 @@ static UINT32 hacky_idle_pc;
 static UINT32 __fastcall speedhack_read_long(UINT32 offset)
 {
 	UINT32 pc = Sh3GetPC(-1);
-	if ( offset == hacky_idle_ram && (pc == hacky_idle_pc || pc == hacky_idle_pc+2)) {
+	if ( offset == hacky_idle_ram && (pc >= hacky_idle_pc && pc <= hacky_idle_pc + 10)) {
 		INT32 rem = Sh3GetRemainingCycles();
 		Sh3BurnCycles(rem > 0 ? rem : speedhack_burn);
 	}
@@ -440,7 +440,7 @@ static UINT16 __fastcall speedhack_read_word(UINT32 offset)
 {
 #if 0
 	UINT32 pc = Sh3GetPC(-1);
-	if ( offset == hacky_idle_ram && (pc == hacky_idle_pc || pc == hacky_idle_pc+2)) {
+	if ( offset == hacky_idle_ram && (pc >= hacky_idle_pc && pc <= hacky_idle_pc + 10)) {
 		INT32 rem = Sh3GetRemainingCycles();
 		Sh3BurnCycles(rem > 0 ? rem : speedhack_burn);
 	}
@@ -452,7 +452,7 @@ static UINT8 __fastcall speedhack_read_byte(UINT32 offset)
 {
 #if 0
 	UINT32 pc = Sh3GetPC(-1);
-	if ( offset == hacky_idle_ram && (pc == hacky_idle_pc || pc == hacky_idle_pc+2)) {
+	if ( offset == hacky_idle_ram && (pc >= hacky_idle_pc && pc <= hacky_idle_pc + 10)) {
 		INT32 rem = Sh3GetRemainingCycles();
 		Sh3BurnCycles(rem > 0 ? rem : speedhack_burn);
 	}

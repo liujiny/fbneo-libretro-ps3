@@ -16,10 +16,16 @@
 #if REALLY_SIMPLE == 1
 
 #if TRANSPARENT == 1
+#ifdef __PS3__
+			if (*gfx2 & 0x8000)
+			{
+				*bmp = *gfx2;
+#else
 			pen = epic12_in16_to_argb(*gfx2);
 			if (pen & 0x20000000)
 			{
 			*bmp = epic12_argb_to_in16(pen);
+#endif
 #else
 			*bmp = *gfx2;
 #endif

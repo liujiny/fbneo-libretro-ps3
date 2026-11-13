@@ -556,6 +556,9 @@ void epic12_init(INT32 ram_size, UINT16 *ram, UINT8 *dippy)
 		if (fd >= 0) close(fd);
 	}
 
+	m_blitter_busy = 0;
+	sh4_clear_cave_blitter_delay_timer();
+
 	thready.init(run_blitter_cb);
 
 	sh4_set_cave_blitter_delay_func(blitter_delay_callback);
@@ -626,6 +629,9 @@ void epic12_reset()
 	m_blit_delay_ns = 0;
 	m_blit_idle_op_bytes = 0;
 
+	thready.notify_wait();
+	m_blitter_busy = 0;
+	sh4_clear_cave_blitter_delay_timer();
 	thready.reset();
 }
 
@@ -1267,6 +1273,8 @@ static void gfx_exec()
 void epic12_wait_blitterthread()
 {
 	thready.notify_wait();
+	m_blitter_busy = 0;
+	sh4_clear_cave_blitter_delay_timer();
 }
 
 static void gfx_exec_write(UINT32 data)
@@ -1291,17 +1299,23 @@ static void gfx_exec_write(UINT32 data)
 			{
 				if (epic12_device_blit_delay && m_delay_scale)
 				{
-					m_blitter_busy = 1;
 					int delay = epic12_device_blit_delay*(15 * m_delay_scale / 50);
 					INT32 cycles = (INT32)((double)((double)delay / 1000000000) * sh4_get_cpu_speed());
 
 					//bprintf(0, _T("old_blitter_delay  %d   cycles  %d\n"),delay, cycles);
 
-					sh4_set_cave_blitter_delay_timer(cycles);
+					if (cycles > 0) {
+						m_blitter_busy = 1;
+						sh4_set_cave_blitter_delay_timer(cycles);
+					} else {
+						m_blitter_busy = 0;
+						sh4_clear_cave_blitter_delay_timer();
+					}
 				}
 				else
 				{
 					m_blitter_busy = 0;
+					sh4_clear_cave_blitter_delay_timer();
 				}
 			} else {  // new method (buffis)
 				// Every EP1C_VRAM_H_LINE_PERIOD_NANOSEC, the Blitter will block other operations, due
@@ -1314,13 +1328,17 @@ static void gfx_exec_write(UINT32 data)
 				//if (m_blit_delay_ns > EP1C_FRAME_DURATION_NANOSEC)
 				//	LOGDBG("Blitter delay! Blit duration %lld ns.\n", m_blit_delay_ns);
 
-				m_blitter_busy = 1;
-
 				INT32 cycles = (INT32)((double)((double)m_blit_delay_ns / 1000000000) * sh4_get_cpu_speed());
 
 				//bprintf(0, _T("new blit_delay  %I64d   cycles  %d\n"),m_blit_delay_ns, cycles);
 
-				sh4_set_cave_blitter_delay_timer(cycles);
+				if (cycles > 0) {
+					m_blitter_busy = 1;
+					sh4_set_cave_blitter_delay_timer(cycles);
+				} else {
+					m_blitter_busy = 0;
+					sh4_clear_cave_blitter_delay_timer();
+				}
 			}
 
 			epic12_device_blit_delay = 0;
@@ -1402,6 +1420,10 @@ static void epic12_draw_screen16_24bpp()
 
 void epic12_draw_screen(UINT8 &recalc_palette)
 {
+	thready.notify_wait();
+	m_blitter_busy = 0;
+	sh4_clear_cave_blitter_delay_timer();
+
 	INT32 scrollx = -m_gfx_scroll_x;
 	INT32 scrolly = -m_gfx_scroll_y;
 
@@ -1463,13 +1485,9 @@ UINT32 epic12_blitter_read(UINT32 offset)
 		case 0x10:
 			if (m_blitter_busy)
 			{
-				//m_maincpu->spin_until_time(attotime::from_usec(10));
 				if (sleep_on_busy) {
-					INT32 rem = Sh3GetRemainingCycles();
-					Sh3BurnCycles(rem > 0 ? rem : m_burn_cycles);
+					Sh3BurnCycles(m_burn_cycles);
 				}
-				//bprintf(0, _T("%d frame - blitter busy read....."), nCurrentFrame);
-
 				return 0x00000000;
 			}
 			else
@@ -1525,6 +1543,10 @@ void epic12_blitter_write(UINT32 offset, UINT32 data)
 
 void epic12_scan(INT32 nAction, INT32 *pnMin)
 {
+	thready.notify_wait();
+	m_blitter_busy = 0;
+	sh4_clear_cave_blitter_delay_timer();
+
 	SCAN_VAR(m_gfx_addr);
 //	SCAN_VAR(m_gfx_addr_shadowcopy); // probably not needed!
 	SCAN_VAR(m_gfx_scroll_x);

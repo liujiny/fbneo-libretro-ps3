@@ -28,6 +28,7 @@ echo "=== Compiling modified FBNeo translation units and mmpork static blocks in
   src/cpu/sh4/sh4.cpp:sh4.o \
   src/burn/devices/epic12.cpp:epic12.o \
   src/burn/drv/cave/d_cv1k.cpp:d_cv1k.o \
+  src/burn/snd/ymz770.cpp:ymz770.o \
   src/burn/ps3_memory_pool.c:ps3_memory_pool.o \
   src/burner/libretro/ps3_benchmark.cpp:ps3_benchmark.o \
   src/burner/libretro/libretro.cpp:libretro.o \
@@ -56,7 +57,7 @@ cp build-cellsdk-release/a.a "$OUT/a.a"
 
 echo "=== Updating archive a.a with mmpork objects ==="
 docker run --rm -v "$SDK:/usr/local/cell:ro" -v "$ROOT/$OUT:/b" -w /b "$IMAGE" \
-  sh -c "$PPU/ppu-lv2-ar.exe r a.a epic12.o sh4.o d_cv1k.o ps3_benchmark.o libretro.o ps3_memory_pool.o \
+  sh -c "$PPU/ppu-lv2-ar.exe r a.a epic12.o sh4.o d_cv1k.o ymz770.o ps3_benchmark.o libretro.o ps3_memory_pool.o \
   cv1k_runtime.o sh3_interpret.o sh3_dispatch_table.o \
   sh3_code_0.o sh3_code_1.o sh3_code_2.o sh3_code_3.o sh3_code_4.o sh3_code_5.o \
   sh3_code_6.o sh3_code_7.o sh3_code_8.o sh3_code_9.o sh3_code_10.o sh3_code_11.o \
@@ -65,8 +66,8 @@ docker run --rm -v "$SDK:/usr/local/cell:ro" -v "$ROOT/$OUT:/b" -w /b "$IMAGE" \
 echo "=== Linking rel.elf for mmpork ==="
 docker run --rm -v "$SDK:/usr/local/cell:ro" -v "$ROOT:/work" \
   -v "$HOME/src/retroarch-psx-ce-upgrade/RetroArch_Orig/objs/snc:/frontend_objs:ro" \
-  -v "/tmp/ra-branch/objs/griffin:/fe:ro" -w /work "$IMAGE" \
-  $PPU/ppu-lv2-g++.exe -oformat=elf /fe/griffin.ppu.o \
+  -w /work "$IMAGE" \
+  $PPU/ppu-lv2-g++.exe -oformat=elf /frontend_objs/griffin/griffin.ppu.o \
   /frontend_objs/gfx/drivers_shader/ps3_stock_shader.ppu.o \
   /frontend_objs/gfx/drivers/gl_shaders/stock_ps3.fpo.o \
   /frontend_objs/gfx/drivers/gl_shaders/stock_ps3.vpo.o \
