@@ -31,6 +31,8 @@ typedef sys_addr_t ps3_native_addr_t;
 #if defined(PS3_MEMORY_DIAGNOSTIC) && PS3_MEMORY_DIAGNOSTIC
 #include <stdio.h>
 #include <stdarg.h>
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 #ifndef PS3_MEMORY_POOL_SIZE_MB
@@ -244,19 +246,32 @@ static void diag_sample_bytes(const void *data, size_t size, size_t *nonzero, un
 /* Unattended testing aid: when /dev_hdd0/tmp/fbneo_dump_frames.txt contains a
  * comma separated list of frame numbers, those frames are written as 24-bit
  * BMPs so a run can be verified without looking at the TV. */
+static void ps3_posix_write_all(int fd, const void *buf, size_t count)
+{
+	const uint8_t *p = (const uint8_t *)buf;
+	while (count > 0)
+	{
+		ssize_t n = write(fd, p, count);
+		if (n <= 0) break;
+		p += n;
+		count -= (size_t)n;
+	}
+}
+
 static void ps3_dump_frame_bmp(const char *path, const void *data,
 		unsigned width, unsigned height, size_t pitch)
 {
-	FILE *f;
+	int fd;
 	unsigned y;
 	unsigned row;
 	unsigned datasize;
 	unsigned char hdr[54];
+	unsigned char *row_buf;
 
 	if (!data || !width || !height)
 		return;
-	f = fopen(path, "wb");
-	if (!f)
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+	if (fd < 0)
 		return;
 
 	row      = (width * 3u + 3u) & ~3u;
@@ -278,25 +293,28 @@ static void ps3_dump_frame_bmp(const char *path, const void *data,
 	hdr[34] = (unsigned char)(datasize & 0xff);
 	hdr[35] = (unsigned char)((datasize >> 8) & 0xff);
 	hdr[38] = (unsigned char)((datasize >> 16) & 0xff);
-	fwrite(hdr, 1, sizeof(hdr), f);
+	ps3_posix_write_all(fd, hdr, sizeof(hdr));
 
-	for (y = height; y-- > 0; )
+	row_buf = (unsigned char *)malloc(row);
+	if (row_buf)
 	{
-		const uint16_t *src = (const uint16_t *)((const uint8_t *)data + (size_t)y * pitch);
-		unsigned x;
-		for (x = 0; x < width; x++)
+		memset(row_buf, 0, row);
+		for (y = height; y-- > 0; )
 		{
-			uint16_t px = src[x];
-			unsigned char bgr[3];
-			bgr[0] = (unsigned char)((px & 0x1fu) << 3);            /* blue  */
-			bgr[1] = (unsigned char)(((px >> 5) & 0x3fu) << 2);     /* green */
-			bgr[2] = (unsigned char)(((px >> 11) & 0x1fu) << 3);    /* red   */
-			fwrite(bgr, 1, 3, f);
+			const uint16_t *src = (const uint16_t *)((const uint8_t *)data + (size_t)y * pitch);
+			unsigned x;
+			for (x = 0; x < width; x++)
+			{
+				uint16_t px = src[x];
+				row_buf[x * 3 + 0] = (unsigned char)((px & 0x1fu) << 3);            /* blue  */
+				row_buf[x * 3 + 1] = (unsigned char)(((px >> 5) & 0x3fu) << 2);     /* green */
+				row_buf[x * 3 + 2] = (unsigned char)(((px >> 11) & 0x1fu) << 3);    /* red   */
+			}
+			ps3_posix_write_all(fd, row_buf, row);
 		}
-		for (x = (unsigned)(width * 3u); x < row; x++)
-			fputc(0, f);
+		free(row_buf);
 	}
-	fclose(f);
+	close(fd);
 }
 
 void ps3_mem_diag_dump_video_frame(const void *data, unsigned width,
@@ -309,15 +327,17 @@ void ps3_mem_diag_dump_video_frame(const void *data, unsigned width,
 
 	if (n_dump < 0)
 	{
-		FILE *cfg;
+		int cfg_fd;
 		n_dump = 0;
-		cfg = fopen("/dev_hdd0/tmp/fbneo_dump_frames.txt", "r");
-		if (cfg)
+		cfg_fd = open("/dev_hdd0/tmp/fbneo_dump_frames.txt", O_RDONLY);
+		if (cfg_fd >= 0)
 		{
 			char buf[256];
-			if (fgets(buf, sizeof(buf), cfg))
+			ssize_t n = read(cfg_fd, buf, sizeof(buf) - 1);
+			if (n > 0)
 			{
 				char *p = buf;
+				buf[n] = '\0';
 				while (*p && n_dump < 8)
 				{
 					while (*p && (*p < '0' || *p > '9')) p++;
@@ -325,7 +345,7 @@ void ps3_mem_diag_dump_video_frame(const void *data, unsigned width,
 					dump_at[n_dump++] = (unsigned)strtoul(p, &p, 10);
 				}
 			}
-			fclose(cfg);
+			close(cfg_fd);
 			if (n_dump > 0)
 				DIAG_PRINT("[PS3 FRAME DUMP] enabled frames=%d first=%u\n", n_dump, dump_at[0]);
 		}
@@ -631,6 +651,7 @@ static void *native_malloc(size_t size, size_t requested_size, const char *label
 
 int pool_init(void)
 {
+	if (POOL_SIZE == 0) return 1;
 	if (g_pool != NULL) return 1;
 	diag_native_user_memory("before_pool_allocate");
 	g_pool = (uint8_t *)memalign(POOL_ALIGNMENT, POOL_SIZE);

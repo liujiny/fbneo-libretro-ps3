@@ -756,15 +756,38 @@ void mpeg_audio::retrieve_subbuffer(int step)
 		memcpy(subbuffer[chan], bdata[chan][step], 32*sizeof(subbuffer[0][0]));
 }
 
+static double s_cos_transposed[32][32];
+static bool s_cos_transposed_inited = false;
+
+static void init_cos_transposed()
+{
+	if (s_cos_transposed_inited) return;
+	for (int j = 0; j < 32; j++) {
+		for (int i = 0; i < 32; i++) {
+			s_cos_transposed[j][i] = cos(i * (2 * j + 1) * M_PI / 64.0);
+		}
+	}
+	s_cos_transposed_inited = true;
+}
+
 void mpeg_audio::idct32(const double *input, double *output)
 {
-	// Simplest idct32 ever, non-fast at all
-	for (int i = 0; i < 32; i++) {
-		double s = 0;
-		for (int j = 0; j < 32; j++)
-			s += input[j] * m_cos_cache[i][j];
-		output[i] = s;
+	if (!s_cos_transposed_inited) init_cos_transposed();
+	double s[32] = { 0.0 };
+	for (int j = 0; j < 32; j++) {
+		const double in = input[j];
+		if (in == 0.0)
+			continue;
+		const double *c = s_cos_transposed[j];
+		for (int i = 0; i < 32; i += 4) {
+			s[i + 0] += in * c[i + 0];
+			s[i + 1] += in * c[i + 1];
+			s[i + 2] += in * c[i + 2];
+			s[i + 3] += in * c[i + 3];
+		}
 	}
+	for (int i = 0; i < 32; i++)
+		output[i] = s[i];
 }
 
 void mpeg_audio::resynthesis(const double *input, double *output)

@@ -30,6 +30,7 @@ echo "=== Compiling modified FBNeo translation units in parallel ==="
   src/burn/ps3_memory_pool.c:ps3_memory_pool.o \
   src/burner/libretro/ps3_benchmark.cpp:ps3_benchmark.o \
   src/burner/libretro/libretro.cpp:libretro.o \
+  src/burner/libretro/ps3_wrap_main.c:ps3_wrap_main.o \
   standalone/runtime/cv1k_runtime.c:cv1k_runtime.o \
   standalone/runtime/sh3_interpret.c:sh3_interpret.o \
   standalone/gen/sh3_dispatch_table.c:sh3_dispatch_table.o
@@ -43,7 +44,7 @@ cp build-sh3rec/sh3_code_*.o "$OUT/"
 echo "=== Updating archive a.a ==="
 docker run --rm -v "$SDK:/usr/local/cell:ro" -v "$ROOT/$OUT:/b" -w /b "$IMAGE" \
   sh -c "$PPU/ppu-lv2-ar.exe r a.a epic12.o sh4.o d_cv1k.o ymz770.o ps3_benchmark.o libretro.o ps3_memory_pool.o \
-  cv1k_runtime.o sh3_interpret.o sh3_dispatch_table.o \
+  ps3_wrap_main.o cv1k_runtime.o sh3_interpret.o sh3_dispatch_table.o \
   sh3_code_0.o sh3_code_1.o sh3_code_2.o sh3_code_3.o sh3_code_4.o sh3_code_5.o \
   sh3_code_6.o sh3_code_7.o sh3_code_8.o sh3_code_9.o sh3_code_10.o sh3_code_11.o \
   sh3_code_12.o sh3_code_13.o sh3_code_14.o sh3_code_15.o"
@@ -56,7 +57,7 @@ docker run --rm -v "$SDK:/usr/local/cell:ro" -v "$ROOT:/work" \
   /frontend_objs/gfx/drivers_shader/ps3_stock_shader.ppu.o \
   /frontend_objs/gfx/drivers/gl_shaders/stock_ps3.fpo.o \
   /frontend_objs/gfx/drivers/gl_shaders/stock_ps3.vpo.o \
-  -Wl,--wrap=cellGameBootCheck -Wl,--wrap=cellGameContentPermit \
+  -Wl,--wrap=cellGameBootCheck -Wl,--wrap=cellGameContentPermit -Wl,--wrap=main \
   -L/usr/local/cell/target/ppu/lib/PSGL/RSX/ultra-opt -lPSGL -lPSGLcgc \
   "$OUT/a.a" -lcgc -lgcm_cmdasm -lgcm_sys_stub -lresc_stub -lm -lio_stub -lfs_stub \
   -lsysutil_stub -lsysutil_game_stub -lsysutil_screenshot_stub -lsysutil_np_stub \

@@ -1,0 +1,34 @@
+[PS3 BENCHMARK REPORT BEGIN]
+game=ddpdfk
+driver=DoDonPachi Dai-Fukkatsu Ver 1.5 (2008/06/23 MASTER VER 1.5)
+hardware=Cave CV1000
+total_frames=2701
+benchmarked_frames=2371
+wall_time_us=34556145
+wall_fps=68.61
+emulation_time_us=48480974
+emulation_fps=48.91
+frame_time_avg_ms=20.447
+frame_time_min_ms=3.698
+frame_time_max_ms=156.351
+user_memory_initial=27787264
+user_memory_final=1347584
+user_memory_consumed=26439680
+pool_total=8388608
+pool_used=0
+pool_peak=0
+system_live=62964864
+system_peak=62964864
+native_live=0
+native_peak=0
+tracked_live_peak=62964864
+fallback_count=64
+allocation_failures=0
+phase_cpu_ms=49260
+phase_sound_ms=428
+phase_blit_ms=2792
+phase_video_ms=0
+phase_retrorun_ms=68193
+phase_cpu_total_ms=49260
+phase_total_ms=52481
+[PS3 BENCHMARK REPORT END]

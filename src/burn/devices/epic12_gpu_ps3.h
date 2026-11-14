@@ -69,6 +69,7 @@ static bool epic12_ps3_gpu_init()
 
 	PSGLcontext *current_ctx = psglGetCurrentContext();
 	if (!current_ctx) {
+		ps3_mem_diag_print("[EPIC12-RSX] Error: No current PSGL context found!\n");
 		bprintf(0, _T("[EPIC12-RSX] Error: No current PSGL context found!\n"));
 		g_ps3_gpu_failed = true;
 		return false;
@@ -76,6 +77,7 @@ static bool epic12_ps3_gpu_init()
 
 	g_cg_ctx = cgCreateContext();
 	if (!g_cg_ctx) {
+		ps3_mem_diag_print("[EPIC12-RSX] Failed to create Cg context!\n");
 		bprintf(0, _T("[EPIC12-RSX] Failed to create Cg context!\n"));
 		g_ps3_gpu_failed = true;
 		return false;
@@ -89,6 +91,8 @@ static bool epic12_ps3_gpu_init()
 	g_fprg_feedback = cgCreateProgram(g_cg_ctx, CG_BINARY, (const char*)epic12_rsx_feedback_fpo, fprof, NULL, NULL);
 
 	if (!g_vprg || !g_fprg_fast || !g_fprg_feedback) {
+		ps3_mem_diag_print("[EPIC12-RSX] Failed to load binary Cg programs: vprg=%p fast=%p feedback=%p\n",
+			g_vprg, g_fprg_fast, g_fprg_feedback);
 		bprintf(0, _T("[EPIC12-RSX] Failed to load binary Cg programs: vprg=%p fast=%p feedback=%p\n"),
 			g_vprg, g_fprg_fast, g_fprg_feedback);
 		g_ps3_gpu_failed = true;
@@ -143,6 +147,7 @@ static bool epic12_ps3_gpu_init()
 
 	GLenum status = glCheckFramebufferStatusOES(GL_FRAMEBUFFER_OES);
 	if (status != GL_FRAMEBUFFER_COMPLETE_OES) {
+		ps3_mem_diag_print("[EPIC12-RSX] FBO incomplete: status=0x%04x\n", status);
 		bprintf(0, _T("[EPIC12-RSX] FBO incomplete: status=0x%04x\n"), status);
 		glBindFramebufferOES(GL_FRAMEBUFFER_OES, 0);
 		g_ps3_gpu_failed = true;
@@ -154,6 +159,7 @@ static bool epic12_ps3_gpu_init()
 	g_page_cache.reset(128);
 
 	g_ps3_gpu_inited = true;
+	ps3_mem_diag_print("[EPIC12-RSX] Hardware GPU Rasterizer successfully initialized! (Atlas=2048x1024, FBO=512x512)\n");
 	bprintf(0, _T("[EPIC12-RSX] Hardware GPU Rasterizer successfully initialized! (Atlas=2048x1024, FBO=512x512)\n"));
 	return true;
 }

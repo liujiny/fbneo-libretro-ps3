@@ -6,8 +6,8 @@ cd "$ROOT"
 
 echo "=== Packaging DoDonPachi Dai-Fukkatsu Standalone PKG ==="
 mkdir -p packages/ddpdfk/USRDIR/cores
-cp build-cellsdk-sh3rec/rel.self packages/ddpdfk/USRDIR/cores/fbneo_libretro_psl1ght.self
-cp build-cellsdk-sh3rec/rel.self packages/ddpdfk/USRDIR/EBOOT.BIN
+cp build-cellsdk-drcgpu/rel.self packages/ddpdfk/USRDIR/cores/fbneo_libretro_psl1ght.self
+cp build-cellsdk/EBOOT_NPDRM.BIN packages/ddpdfk/USRDIR/EBOOT.BIN
 cp ps3_dualcore_pkg_20260928/SSNE10001/ICON0.PNG packages/ddpdfk/
 
 ./psl1ght-current-src/tools/sfo_pkg/sfo --fromxml packages/ddpdfk/sfo.xml packages/ddpdfk/PARAM.SFO

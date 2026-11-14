@@ -19,8 +19,8 @@ static UINT16 m_flash_page_size;
 static FILE *m_region_file;
 
 #define CV1K_CACHE_WAYS 2
-#define CV1K_CACHE_SETS 1024
-#define CV1K_CACHE_TOTAL (CV1K_CACHE_SETS * CV1K_CACHE_WAYS) // 2048 pages = ~4.2 MiB
+#define CV1K_CACHE_SETS 512
+#define CV1K_CACHE_TOTAL (CV1K_CACHE_SETS * CV1K_CACHE_WAYS) // 1024 pages = ~2.1 MiB
 
 static UINT8 *cv1k_cache_data = NULL;
 static UINT32 cv1k_cache_tags[CV1K_CACHE_TOTAL];

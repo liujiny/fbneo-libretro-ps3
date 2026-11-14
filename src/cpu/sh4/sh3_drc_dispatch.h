@@ -423,8 +423,8 @@ template<bool Chained, bool Count> static SH3_DISPATCH_INLINE bool sh3_drc_dispa
    if(Count) { ++sh3_drc_work.exit_no_entry; sh3_drc_work.fallback.last_origin=SH3_FB_NO_ENTRY; }
    return false;
   }
-  ++sh3_dbg_fallbacks;
   if(m_sh4_icount<cycles) {
+   ++sh3_dbg_fallbacks;
    ++sh3_dbg_ex_budget;
    if(Count) { ++sh3_drc_work.exit_budget; sh3_drc_work.fallback.last_origin=SH3_FB_BUDGET; }
    return false;

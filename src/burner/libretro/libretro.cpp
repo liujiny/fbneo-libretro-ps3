@@ -1331,6 +1331,14 @@ void retro_init()
 	struct retro_log_callback log;
 
 #ifdef __PS3__
+	{
+		FILE *bfp = fopen("/dev_hdd0/tmp/cv1k_boot.log", "a");
+		if (bfp) {
+			fprintf(bfp, "[BOOT] retro_init entered\n");
+			fflush(bfp);
+			fclose(bfp);
+		}
+	}
 	ps3_mem_diag_reset();
 	ps3_mem_diag_stage("retro_init_entry");
 	ps3_mem_diag_probe_enabled();
@@ -2396,6 +2404,14 @@ static bool retro_load_game_common()
 
 		// Initialize game driver
 #ifdef __PS3__
+		{
+			FILE *bfp = fopen("/dev_hdd0/tmp/cv1k_boot.log", "a");
+			if (bfp) {
+				fprintf(bfp, "[BOOT] BurnDrvInit_begin: driver=%s (idx=%d)\n", g_driver_name, nBurnDrvActive);
+				fflush(bfp);
+				fclose(bfp);
+			}
+		}
 		ps3_mem_diag_stage("BurnDrvInit_begin");
 #endif
 		if(BurnDrvInit() == 0)
@@ -2408,6 +2424,14 @@ static bool retro_load_game_common()
 			goto end;
 		}
 #ifdef __PS3__
+		{
+			FILE *bfp = fopen("/dev_hdd0/tmp/cv1k_boot.log", "a");
+			if (bfp) {
+				fprintf(bfp, "[BOOT] BurnDrvInit SUCCESS!\n");
+				fflush(bfp);
+				fclose(bfp);
+			}
+		}
 		ps3_mem_diag_stage("BurnDrvInit_end");
 		ps3_mem_diag_summary("game_load_success");
 #endif
@@ -2604,6 +2628,17 @@ static int retro_dat_romset_path(const struct retro_game_info* info)
 
 bool retro_load_game(const struct retro_game_info *info)
 {
+#ifdef __PS3__
+	{
+		FILE *bfp = fopen("/dev_hdd0/tmp/cv1k_boot.log", "a");
+		if (bfp) {
+			fprintf(bfp, "[BOOT] retro_load_game entered: info=%p, path=%s\n",
+				info, (info && info->path) ? info->path : "(null)");
+			fflush(bfp);
+			fclose(bfp);
+		}
+	}
+#endif
 	if (!info)
 		return false;
 #ifdef __PS3__

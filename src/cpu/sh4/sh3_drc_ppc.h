@@ -313,7 +313,11 @@ extern unsigned sh3_dbg_compiles, sh3_dbg_resets, sh3_dbg_invalidates;
 // on CV1000; the override lets host differential tests size it from identical
 // sources.
 #ifndef SH3_PPC_TABLE_SIZE
+#ifdef __PS3__
+#define SH3_PPC_TABLE_SIZE 65536
+#else
 #define SH3_PPC_TABLE_SIZE 131072
+#endif
 #endif
 
 // Arena sector size. The code arena is a ring of sectors and a block never
@@ -924,7 +928,7 @@ struct Compiler {
              UINT32 absolute, bool /*ea*/, bool pre, bool post, unsigned service_opcode=0) {
   CatGuard catScope(*this, CAT_MEMADDR);
   const RamWindow &ram=ram_window;
-  const unsigned device_opcode=(sh3_device_reads[0].callback || sh3_device_reads[1].callback)?service_opcode:0;
+  const unsigned device_opcode=service_opcode;
   bool constant_ram=ram.base && base==-1 &&
    ((absolute&0x7fffffffu)&~(ram.span-1))==ram.start;
   bool constant_rom=!write && base==-1 &&
@@ -1034,11 +1038,11 @@ struct Compiler {
   if ((op & 0xf000) == 0xd000) return memory(false,4,n,-1,-1,0,((pc+4)&~3u)+(op&255)*4,true,false,false);
   if ((op & 0xf000) == 0x2000 && (lo <= 2 || (lo >= 4 && lo <= 6))) {
    int size = 1 << (lo & 3); bool pre = (lo & 4) != 0;
-   return memory(true,size,m,n,-1,pre?-size:0,0,!pre,pre,false);
+   return memory(true,size,m,n,-1,pre?-size:0,0,!pre,pre,false,op);
   }
   if ((op & 0xf000) == 0x6000 && (lo <= 2 || (lo >= 4 && lo <= 6))) {
    bool post = (lo & 4) != 0;
-   return memory(false,1<<(lo&3),n,m,-1,0,0,!post,false,post,lo==2?op:0);
+   return memory(false,1<<(lo&3),n,m,-1,0,0,!post,false,post,op);
   }
   if ((op & 0xf000) == 0 && ((lo >= 4 && lo <= 6) || (lo >= 12 && lo <= 14))) {
    bool wr = lo < 8;

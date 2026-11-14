@@ -424,10 +424,12 @@ static UINT32 hacky_idle_pc;
 
 static UINT32 __fastcall speedhack_read_long(UINT32 offset)
 {
-	UINT32 pc = Sh3GetPC(-1);
-	if ( offset == hacky_idle_ram && (pc >= hacky_idle_pc && pc <= hacky_idle_pc + 10)) {
-		INT32 rem = Sh3GetRemainingCycles();
-		Sh3BurnCycles(rem > 0 ? rem : speedhack_burn);
+	if ( offset == hacky_idle_ram ) {
+		UINT32 pc = Sh3GetPC(-1);
+		if (pc >= hacky_idle_pc && pc <= hacky_idle_pc + 10) {
+			INT32 rem = Sh3GetRemainingCycles();
+			Sh3BurnCycles(rem > 0 ? rem : speedhack_burn);
+		}
 	}
 	UINT32 V = *((UINT32 *)(DrvMainRAM + (offset & 0xfffffc)));
 #ifdef LSB_FIRST
@@ -720,7 +722,7 @@ static INT32 DrvInit()
 	Sh3SetDrcRam(DrvMainRAM, 0x0c000000, 0x1000000, is_type_d ? 0x1000000 : 0x800000);
 	/* CV1000 polls the blitter busy bit and DMA channel 0 constantly. */
 	Sh3SetDrcDeviceRead(0, 0x18000010, 0);
-	Sh3SetDrcDeviceRead(1, 0x0400002c, 7);
+	Sh3SetDrcDeviceRead(1, 0x04000000, 7);
 #endif
 
 	Sh3Close();

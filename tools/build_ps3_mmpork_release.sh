@@ -17,7 +17,7 @@ export OUT
 
 export INC="-I/usr/local/cell/target/ppu/include -I/usr/local/cell/target/ppu/include/PSGL -Istandalone/gen_mmpork -Istandalone/runtime -Isrc/burner/win32 -Isrc/burner/libretro/libretro-common/include -Isrc/burner/libretro -Isrc/burn -Isrc/cpu -Isrc/cpu/sh4 -Isrc/burn/snd -Isrc/burn/devices -Isrc/intf -Isrc/intf/input -Isrc/intf/cd -Isrc/intf/audio -Isrc/burner -Isrc/dep/libs/zlib"
 
-export DEF="-D__PS3__ -D__LIBRETRO__ -DWORDS_BIGENDIAN -DSH3_STATIC_REC=1 -DSH3_PPC_DRC_TEST=1 \
+export DEF="-D__PS3__ -D__LIBRETRO__ -DWORDS_BIGENDIAN -DSH3_STATIC_REC=1 -DSH3_PPC_DRC_TEST=1 -DCV1K_GAME_MMPORK=1 \
 -DSH3_PPC_CACHE_BYTES=(16*1024*1024) -DSALVIA_CV1K_STAMP_PROBE=1 \
 -DFRONTEND_SUPPORTS_RGB565=1 -DFBNEO_DEFAULT_AUDIO_RATE=44100 \
 -DPS3_MEMORY_DIAGNOSTIC=1 -DPS3_MEMORY_POOL_SIZE_MB=8 -DPS3_NATIVE_MEMORY=1 \
@@ -71,7 +71,7 @@ docker run --rm -v "$SDK:/usr/local/cell:ro" -v "$ROOT:/work" \
   /frontend_objs/gfx/drivers_shader/ps3_stock_shader.ppu.o \
   /frontend_objs/gfx/drivers/gl_shaders/stock_ps3.fpo.o \
   /frontend_objs/gfx/drivers/gl_shaders/stock_ps3.vpo.o \
-  -Wl,--wrap=cellGameBootCheck -Wl,--wrap=cellGameContentPermit \
+  -Wl,--wrap=cellGameBootCheck -Wl,--wrap=cellGameContentPermit -Wl,--wrap=main \
   -L/usr/local/cell/target/ppu/lib/PSGL/RSX/ultra-opt -lPSGL -lPSGLcgc \
   "$OUT/a.a" -lcgc -lgcm_cmdasm -lgcm_sys_stub -lresc_stub -lm -lio_stub -lfs_stub \
   -lsysutil_stub -lsysutil_game_stub -lsysutil_screenshot_stub -lsysutil_np_stub \

@@ -12,52 +12,58 @@
 static SH3_HOT_INLINE void sh3_execute_hot_fallback(const UINT16 opcode)
 {
 #if defined(SH3_PPC_DRC) || defined(SH3_HOT_FALLBACK_TEST)
- // CV1000 gameplay samples here put the bulk of the fallbacks in 0x2xxx: the
- // byte/word stores that copy sprites and tile data into VRAM (0x2nm0..0x2nm6).
- // Same helpers, same mapped handlers and cycle charging, only the multiway
- // decode is skipped.
- if ((opcode & 0xf000) == 0x2000) {
-  switch (opcode & 0x0f) {
-   case 0x00: MOVBS(opcode); return;
-   case 0x01: MOVWS(opcode); return;
-   case 0x02: MOVLS(opcode); return;
-   case 0x04: MOVBM(opcode); return;
-   case 0x05: MOVWM(opcode); return;
-   case 0x06: MOVLM(opcode); return;
-  }
- }
- // This is still the interpreter: reuse its exact instruction helpers, including
- // all mapped memory handlers, idle-cycle charging and postincrement semantics.
- // Only the high-frequency R0 destination family skips the general decoder.
- if ((opcode & 0xff00) == 0x6000) {
-  // Exact-opcode samples identify MOV.L @Rm,R0 as the dominant 0x60 fallback.
-  // Keep the original helper, including WaitState/ReadLong and idle accounting;
-  // only bypass the remaining multiway decode for this common operation.
-  if ((opcode & 0x0f) == 2) {
-   MOVLL(opcode);
-   return;
-  }
-  switch (opcode & 0x0f) {
-   case 0x00: MOVBL(opcode); break;
-   case 0x01: MOVWL(opcode); break;
-   case 0x03: MOV(opcode); break;
-   case 0x04: MOVBP(opcode); break;
-   case 0x05: MOVWP(opcode); break;
-   case 0x06: MOVLP(opcode); break;
-   case 0x07: NOT(opcode); break;
-   case 0x08: SWAPB(opcode); break;
-   case 0x09: SWAPW(opcode); break;
-   case 0x0a: NEGC(opcode); break;
-   case 0x0b: NEG(opcode); break;
-   case 0x0c: EXTUB(opcode); break;
-   case 0x0d: EXTUW(opcode); break;
-   case 0x0e: EXTSB(opcode); break;
-   case 0x0f: EXTSW(opcode); break;
-  }
-  return;
- }
+	switch (opcode & 0xf000) {
+		case 0x1000:
+			MOVLS4(opcode);
+			return;
+		case 0x2000:
+			switch (opcode & 0x0f) {
+				case 0x00: MOVBS(opcode); return;
+				case 0x01: MOVWS(opcode); return;
+				case 0x02: MOVLS(opcode); return;
+				case 0x04: MOVBM(opcode); return;
+				case 0x05: MOVWM(opcode); return;
+				case 0x06: MOVLM(opcode); return;
+			}
+			break;
+		case 0x5000:
+			MOVLL4(opcode);
+			return;
+		case 0x6000:
+			switch (opcode & 0x0f) {
+				case 0x00: MOVBL(opcode); return;
+				case 0x01: MOVWL(opcode); return;
+				case 0x02: MOVLL(opcode); return;
+				case 0x03: MOV(opcode); return;
+				case 0x04: MOVBP(opcode); return;
+				case 0x05: MOVWP(opcode); return;
+				case 0x06: MOVLP(opcode); return;
+				case 0x07: NOT(opcode); return;
+				case 0x08: SWAPB(opcode); return;
+				case 0x09: SWAPW(opcode); return;
+				case 0x0a: NEGC(opcode); return;
+				case 0x0b: NEG(opcode); return;
+				case 0x0c: EXTUB(opcode); return;
+				case 0x0d: EXTUW(opcode); return;
+				case 0x0e: EXTSB(opcode); return;
+				case 0x0f: EXTSW(opcode); return;
+			}
+			break;
+		case 0x7000:
+			ADDI(opcode);
+			return;
+		case 0x9000:
+			MOVWI(opcode);
+			return;
+		case 0xd000:
+			MOVLI(opcode);
+			return;
+		case 0xe000:
+			MOVI(opcode);
+			return;
+	}
 #endif
- execute_one(opcode);
+	execute_one(opcode);
 }
 #undef SH3_HOT_INLINE
 #endif

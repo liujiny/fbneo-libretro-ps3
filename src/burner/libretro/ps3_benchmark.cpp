@@ -8,6 +8,8 @@
 #include <string.h>
 #include <ctype.h>
 #include <time.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #if defined(__PS3__)
 #include <sys/memory.h>
@@ -86,60 +88,72 @@ static void trim_whitespace(char *str)
 
 static void parse_config_file(const char *path, ps3_benchmark_config_t *cfg)
 {
-	FILE *fp = fopen(path, "r");
-	if (!fp) return;
+	int fd = open(path, O_RDONLY);
+	if (fd < 0) return;
+	char buf[4096];
+	int rd = read(fd, buf, sizeof(buf) - 1);
+	close(fd);
+	if (rd <= 0) return;
+	buf[rd] = '\0';
 
-	char line[256];
-	while (fgets(line, sizeof(line), fp)) {
+	char *line = buf;
+	while (line && *line) {
+		char *next = strchr(line, '\n');
+		if (next) *next = '\0';
+		char *p_cr = strchr(line, '\r');
+		if (p_cr) *p_cr = '\0';
+
 		char *eq = strchr(line, '=');
-		if (!eq) continue;
-		*eq = '\0';
-		char *key = line;
-		char *val = eq + 1;
-		trim_whitespace(key);
-		trim_whitespace(val);
+		if (eq) {
+			*eq = '\0';
+			char *key = line;
+			char *val = eq + 1;
+			trim_whitespace(key);
+			trim_whitespace(val);
 
-		if (strcmp(key, "enabled") == 0 || strcmp(key, "benchmark_enabled") == 0) {
-			cfg->enabled = atoi(val);
-		} else if (strcmp(key, "max_frames") == 0 || strcmp(key, "frames") == 0) {
-			cfg->max_frames = (unsigned)strtoul(val, NULL, 10);
-		} else if (strcmp(key, "warmup_frames") == 0) {
-			cfg->warmup_frames = (unsigned)strtoul(val, NULL, 10);
-		} else if (strcmp(key, "auto_coin") == 0) {
-			cfg->auto_coin = atoi(val);
-		} else if (strcmp(key, "coin_frame") == 0) {
-			cfg->coin_frame = (unsigned)strtoul(val, NULL, 10);
-		} else if (strcmp(key, "coin_duration") == 0) {
-			cfg->coin_duration = (unsigned)strtoul(val, NULL, 10);
-		} else if (strcmp(key, "coin_retry_interval") == 0) {
-			cfg->coin_retry_interval = (unsigned)strtoul(val, NULL, 10);
-		} else if (strcmp(key, "auto_start") == 0) {
-			cfg->auto_start = atoi(val);
-		} else if (strcmp(key, "start_frame") == 0) {
-			cfg->start_frame = (unsigned)strtoul(val, NULL, 10);
-		} else if (strcmp(key, "start_duration") == 0) {
-			cfg->start_duration = (unsigned)strtoul(val, NULL, 10);
-		} else if (strcmp(key, "start_retry_interval") == 0) {
-			cfg->start_retry_interval = (unsigned)strtoul(val, NULL, 10);
-		} else if (strcmp(key, "start_retry_count") == 0) {
-			cfg->start_retry_count = (unsigned)strtoul(val, NULL, 10);
-		} else if (strcmp(key, "auto_action") == 0) {
-			cfg->auto_action = atoi(val);
-		} else if (strcmp(key, "action_start_frame") == 0) {
-			cfg->action_start_frame = (unsigned)strtoul(val, NULL, 10);
-		} else if (strcmp(key, "action_interval") == 0) {
-			cfg->action_interval = (unsigned)strtoul(val, NULL, 10);
-		} else if (strcmp(key, "save_state_frame") == 0) {
-			cfg->save_state_frame = (unsigned)strtoul(val, NULL, 10);
-		} else if (strcmp(key, "load_state") == 0) {
-			cfg->load_state = (int)strtol(val, NULL, 10);
-		} else if (strcmp(key, "exit_after_frames") == 0) {
-			cfg->exit_after_frames = atoi(val);
-		} else if (strcmp(key, "log_window_frames") == 0) {
-			cfg->log_window_frames = (unsigned)strtoul(val, NULL, 10);
+			if (strcmp(key, "enabled") == 0 || strcmp(key, "benchmark_enabled") == 0) {
+				cfg->enabled = atoi(val);
+			} else if (strcmp(key, "max_frames") == 0 || strcmp(key, "frames") == 0) {
+				cfg->max_frames = (unsigned)strtoul(val, NULL, 10);
+			} else if (strcmp(key, "warmup_frames") == 0) {
+				cfg->warmup_frames = (unsigned)strtoul(val, NULL, 10);
+			} else if (strcmp(key, "auto_coin") == 0) {
+				cfg->auto_coin = atoi(val);
+			} else if (strcmp(key, "coin_frame") == 0) {
+				cfg->coin_frame = (unsigned)strtoul(val, NULL, 10);
+			} else if (strcmp(key, "coin_duration") == 0) {
+				cfg->coin_duration = (unsigned)strtoul(val, NULL, 10);
+			} else if (strcmp(key, "coin_retry_interval") == 0) {
+				cfg->coin_retry_interval = (unsigned)strtoul(val, NULL, 10);
+			} else if (strcmp(key, "auto_start") == 0) {
+				cfg->auto_start = atoi(val);
+			} else if (strcmp(key, "start_frame") == 0) {
+				cfg->start_frame = (unsigned)strtoul(val, NULL, 10);
+			} else if (strcmp(key, "start_duration") == 0) {
+				cfg->start_duration = (unsigned)strtoul(val, NULL, 10);
+			} else if (strcmp(key, "start_retry_interval") == 0) {
+				cfg->start_retry_interval = (unsigned)strtoul(val, NULL, 10);
+			} else if (strcmp(key, "start_retry_count") == 0) {
+				cfg->start_retry_count = (unsigned)strtoul(val, NULL, 10);
+			} else if (strcmp(key, "auto_action") == 0) {
+				cfg->auto_action = atoi(val);
+			} else if (strcmp(key, "action_start_frame") == 0) {
+				cfg->action_start_frame = (unsigned)strtoul(val, NULL, 10);
+			} else if (strcmp(key, "action_interval") == 0) {
+				cfg->action_interval = (unsigned)strtoul(val, NULL, 10);
+			} else if (strcmp(key, "save_state_frame") == 0) {
+				cfg->save_state_frame = (unsigned)strtoul(val, NULL, 10);
+			} else if (strcmp(key, "load_state") == 0) {
+				cfg->load_state = (int)strtol(val, NULL, 10);
+			} else if (strcmp(key, "exit_after_frames") == 0) {
+				cfg->exit_after_frames = atoi(val);
+			} else if (strcmp(key, "log_window_frames") == 0) {
+				cfg->log_window_frames = (unsigned)strtoul(val, NULL, 10);
+			}
 		}
+		if (next) line = next + 1;
+		else break;
 	}
-	fclose(fp);
 }
 
 static void ps3_benchmark_scan_inputs(void)
@@ -258,9 +272,9 @@ void ps3_benchmark_init(void)
 	g_ps3_bench.cfg.log_window_frames = 300;
 
 	// Check if config file exists
-	FILE *fp = fopen(PS3_BENCHMARK_CONFIG_PATH, "r");
-	if (fp) {
-		fclose(fp);
+	int cfd = open(PS3_BENCHMARK_CONFIG_PATH, O_RDONLY);
+	if (cfd >= 0) {
+		close(cfd);
 		g_ps3_bench.cfg.enabled = 1; // Default to enabled if config file is present
 		parse_config_file(PS3_BENCHMARK_CONFIG_PATH, &g_ps3_bench.cfg);
 	}
@@ -600,43 +614,79 @@ int ps3_benchmark_check_exit(unsigned frame)
 	ps3_mem_diag_print("[PS3 BENCHMARK REPORT END]\n");
 
 	// Also write standalone report file
-	FILE *rfp = fopen(PS3_BENCHMARK_REPORT_PATH, "w");
-	if (rfp) {
-		fprintf(rfp, "[PS3 BENCHMARK REPORT BEGIN]\n");
-		fprintf(rfp, "game=%s\n", g_driver_name);
-		fprintf(rfp, "driver=%s\n", BurnDrvGetTextA(DRV_FULLNAME) ? BurnDrvGetTextA(DRV_FULLNAME) : "unknown");
-		fprintf(rfp, "hardware=%s\n", hw_str);
-		fprintf(rfp, "total_frames=%u\n", frame + 1);
-		fprintf(rfp, "benchmarked_frames=%u\n", b_frames);
-		fprintf(rfp, "wall_time_us=%llu\n", bench_wall_us);
-		fprintf(rfp, "wall_fps=%.2f\n", wall_fps);
-		fprintf(rfp, "emulation_time_us=%llu\n", total_emu_us);
-		fprintf(rfp, "emulation_fps=%.2f\n", emu_fps);
-		fprintf(rfp, "frame_time_avg_ms=%.3f\n", avg_ms);
-		fprintf(rfp, "frame_time_min_ms=%.3f\n", min_ms);
-		fprintf(rfp, "frame_time_max_ms=%.3f\n", max_ms);
-		fprintf(rfp, "user_memory_initial=%lu\n", g_ps3_bench.initial_available_user_memory);
-		fprintf(rfp, "user_memory_final=%lu\n", final_user_memory);
-		fprintf(rfp, "user_memory_consumed=%ld\n", memory_consumed);
-		fprintf(rfp, "pool_total=%lu\n", (unsigned long)mem.pool_total);
-		fprintf(rfp, "pool_used=%lu\n", (unsigned long)mem.pool_used);
-		fprintf(rfp, "pool_peak=%lu\n", (unsigned long)mem.pool_peak);
-		fprintf(rfp, "system_live=%lu\n", (unsigned long)mem.system_live);
-		fprintf(rfp, "system_peak=%lu\n", (unsigned long)mem.system_peak);
-		fprintf(rfp, "native_live=%lu\n", (unsigned long)mem.native_live);
-		fprintf(rfp, "native_peak=%lu\n", (unsigned long)mem.native_peak);
-		fprintf(rfp, "tracked_live_peak=%lu\n", (unsigned long)mem.tracked_live_peak);
-		fprintf(rfp, "fallback_count=%lu\n", (unsigned long)mem.fallback_count);
-		fprintf(rfp, "allocation_failures=%lu\n", (unsigned long)mem.allocation_failure_count);
-		fprintf(rfp, "phase_cpu_ms=%u\n", (unsigned)(g_ps3_bench.phase_us[0] / 1000ULL));
-		fprintf(rfp, "phase_sound_ms=%u\n", (unsigned)(g_ps3_bench.phase_us[1] / 1000ULL));
-		fprintf(rfp, "phase_blit_ms=%u\n", (unsigned)(g_ps3_bench.phase_us[2] / 1000ULL));
-		fprintf(rfp, "phase_video_ms=%u\n", (unsigned)(g_ps3_bench.phase_us[3] / 1000ULL));
-		fprintf(rfp, "phase_retrorun_ms=%u\n", (unsigned)(g_ps3_bench.phase_us[4] / 1000ULL));
-		fprintf(rfp, "phase_cpu_total_ms=%u\n", (unsigned)(g_ps3_bench.phase_us[0] / 1000ULL));
-		fprintf(rfp, "phase_total_ms=%u\n", (unsigned)((g_ps3_bench.phase_us[0] + g_ps3_bench.phase_us[1] + g_ps3_bench.phase_us[2] + g_ps3_bench.phase_us[3]) / 1000ULL));
-		fprintf(rfp, "[PS3 BENCHMARK REPORT END]\n");
-		fclose(rfp);
+	int rfd = open(PS3_BENCHMARK_REPORT_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+	if (rfd >= 0) {
+		char rpt[2048];
+		int n = snprintf(rpt, sizeof(rpt),
+			"[PS3 BENCHMARK REPORT BEGIN]\n"
+			"game=%s\n"
+			"driver=%s\n"
+			"hardware=%s\n"
+			"total_frames=%u\n"
+			"benchmarked_frames=%u\n"
+			"wall_time_us=%llu\n"
+			"wall_fps=%.2f\n"
+			"emulation_time_us=%llu\n"
+			"emulation_fps=%.2f\n"
+			"frame_time_avg_ms=%.3f\n"
+			"frame_time_min_ms=%.3f\n"
+			"frame_time_max_ms=%.3f\n"
+			"user_memory_initial=%lu\n"
+			"user_memory_final=%lu\n"
+			"user_memory_consumed=%ld\n"
+			"pool_total=%lu\n"
+			"pool_used=%lu\n"
+			"pool_peak=%lu\n"
+			"system_live=%lu\n"
+			"system_peak=%lu\n"
+			"native_live=%lu\n"
+			"native_peak=%lu\n"
+			"tracked_live_peak=%lu\n"
+			"fallback_count=%lu\n"
+			"allocation_failures=%lu\n"
+			"phase_cpu_ms=%u\n"
+			"phase_sound_ms=%u\n"
+			"phase_blit_ms=%u\n"
+			"phase_video_ms=%u\n"
+			"phase_retrorun_ms=%u\n"
+			"phase_cpu_total_ms=%u\n"
+			"phase_total_ms=%u\n"
+			"[PS3 BENCHMARK REPORT END]\n",
+			g_driver_name,
+			BurnDrvGetTextA(DRV_FULLNAME) ? BurnDrvGetTextA(DRV_FULLNAME) : "unknown",
+			hw_str,
+			frame + 1,
+			b_frames,
+			bench_wall_us,
+			wall_fps,
+			total_emu_us,
+			emu_fps,
+			avg_ms,
+			min_ms,
+			max_ms,
+			g_ps3_bench.initial_available_user_memory,
+			final_user_memory,
+			memory_consumed,
+			(unsigned long)mem.pool_total,
+			(unsigned long)mem.pool_used,
+			(unsigned long)mem.pool_peak,
+			(unsigned long)mem.system_live,
+			(unsigned long)mem.system_peak,
+			(unsigned long)mem.native_live,
+			(unsigned long)mem.native_peak,
+			(unsigned long)mem.tracked_live_peak,
+			(unsigned long)mem.fallback_count,
+			(unsigned long)mem.allocation_failure_count,
+			(unsigned)(g_ps3_bench.phase_us[0] / 1000ULL),
+			(unsigned)(g_ps3_bench.phase_us[1] / 1000ULL),
+			(unsigned)(g_ps3_bench.phase_us[2] / 1000ULL),
+			(unsigned)(g_ps3_bench.phase_us[3] / 1000ULL),
+			(unsigned)(g_ps3_bench.phase_us[4] / 1000ULL),
+			(unsigned)(g_ps3_bench.phase_us[0] / 1000ULL),
+			(unsigned)((g_ps3_bench.phase_us[0] + g_ps3_bench.phase_us[1] + g_ps3_bench.phase_us[2] + g_ps3_bench.phase_us[3]) / 1000ULL)
+		);
+		if (n > 0) write(rfd, rpt, (size_t)n);
+		close(rfd);
 	}
 
 	ps3_mem_diag_summary("benchmark_completed");

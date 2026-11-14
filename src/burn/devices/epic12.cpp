@@ -115,20 +115,6 @@ static inline UINT16* epic12_get_write_row(UINT32 y)
 		epic12_slabs[slab_idx] = (UINT16*)BurnMalloc(EPIC12_SLAB_LINES * EPIC12_LINE_WIDTH * sizeof(UINT16));
 		ps3_mem_diag_print("[EPIC12] alloc slab %u line %u ptr=%p\n", slab_idx, y, epic12_slabs[slab_idx]);
 		if (!epic12_slabs[slab_idx]) {
-			/* Out of memory for this slab: alias it onto the shared scratch slab so
-			 * the blit still lands somewhere instead of being dropped (dropped
-			 * writes leave blank bands where the game expects graphics). */
-			if (epic12_scratch_slab) {
-				epic12_slabs[slab_idx] = epic12_scratch_slab;
-				{
-					UINT32 base2 = slab_idx * EPIC12_SLAB_LINES, r2;
-					for (r2 = 0; r2 < EPIC12_SLAB_LINES; r2++)
-						epic12_row_ptrs[base2 + r2] = epic12_scratch_slab + (r2 * EPIC12_LINE_WIDTH);
-				}
-				return epic12_row_ptrs[y];
-			}
-			/* The zero row is shared by every unallocated read row.
-			 * Never return it as a writable destination. */
 			return NULL;
 		}
 		memset(epic12_slabs[slab_idx], 0, EPIC12_SLAB_LINES * EPIC12_LINE_WIDTH * sizeof(UINT16));
@@ -517,7 +503,7 @@ void epic12_init(INT32 ram_size, UINT16 *ram, UINT8 *dippy)
 		for (i = 0; i < slab_limit; i++) {
 			sys_memory_info_t mi;
 			if (sys_memory_get_user_memory_size(&mi) != 0) break;
-			if (mi.available_user_memory < 16u * 1024u * 1024u) break;
+			if (mi.available_user_memory < 4u * 1024u * 1024u) break;
 			ps3_mem_diag_set_next_label("epic12_vram");
 			epic12_slabs[i] = (UINT16*)BurnMalloc(EPIC12_SLAB_LINES * EPIC12_LINE_WIDTH * sizeof(UINT16));
 			if (!epic12_slabs[i]) break;
@@ -529,7 +515,7 @@ void epic12_init(INT32 ram_size, UINT16 *ram, UINT8 *dippy)
 			}
 			++reserved;
 		}
-		ps3_mem_diag_print("[EPIC12] reserved %u of %u VRAM slabs at init", reserved, (unsigned)EPIC12_SLAB_COUNT);
+		ps3_mem_diag_print("[EPIC12] reserved %u of %u VRAM slabs at init\n", reserved, (unsigned)EPIC12_SLAB_COUNT);
 	}
 	m_gfx_size = 0x2000 * 0x1000;
 	m_bitmaps = (UINT32*)epic12_zero_row;

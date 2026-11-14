@@ -17,11 +17,28 @@ int main(int argc, char *argv[])
     }
 
     char game_path[256] = "/dev_hdd0/ROMS/ddpdfk.zip";
+    const char *self_core = NULL;
+
+    if (argc > 0 && argv[0]) {
+        if (strstr(argv[0], "CAVE00002")) {
+            strcpy(game_path, "/dev_hdd0/ROMS/mmpork.zip");
+            self_core = "/dev_hdd0/game/CAVE00002/USRDIR/cores/fbneo_libretro_psl1ght.self";
+        } else if (strstr(argv[0], "CAVE00001")) {
+            strcpy(game_path, "/dev_hdd0/ROMS/ddpdfk.zip");
+            self_core = "/dev_hdd0/game/CAVE00001/USRDIR/cores/fbneo_libretro_psl1ght.self";
+        }
+    }
+
     FILE *fp = fopen("/dev_hdd0/tmp/fbneo_launch_game.txt", "r");
     if (fp) {
-        if (fgets(game_path, sizeof(game_path), fp)) {
-            char *p = strchr(game_path, '\r'); if (p) *p = 0;
-            p = strchr(game_path, '\n'); if (p) *p = 0;
+        char buf[256];
+        if (fgets(buf, sizeof(buf), fp)) {
+            char *p = strchr(buf, '\r'); if (p) *p = 0;
+            p = strchr(buf, '\n'); if (p) *p = 0;
+            if (buf[0]) {
+                strncpy(game_path, buf, sizeof(game_path) - 1);
+                game_path[sizeof(game_path) - 1] = 0;
+            }
         }
         fclose(fp);
     }
@@ -31,15 +48,14 @@ int main(int argc, char *argv[])
         fflush(log);
     }
 
-    const char *candidates[] = {
-        "/dev_hdd0/game/SSNE10001/USRDIR/cores/fbneo_libretro_psl1ght.self",
-        "/dev_hdd0/game/SSNE10001/USRDIR/cores/fbneo_libretro_psl1ght.SELF",
-        "/dev_hdd0/game/SSNE10001/USRDIR/cores/fbneo_libretro_ps3.self",
-        "/dev_hdd0/game/SSNE10001/USRDIR/cores/fbneo_libretro_ps3.SELF",
-        "/dev_hdd0/game/ARCD00001/USRDIR/cores/fbneo_libretro_psl1ght.self",
-        "/dev_hdd0/game/ARCD00001/USRDIR/cores/fbneo_libretro_psl1ght.SELF",
-        NULL
-    };
+    const char *candidates[10] = { 0 };
+    int cidx = 0;
+    if (self_core) candidates[cidx++] = self_core;
+    candidates[cidx++] = "/dev_hdd0/game/SSNE10001/USRDIR/cores/fbneo_libretro_psl1ght.self";
+    candidates[cidx++] = "/dev_hdd0/game/CAVE00001/USRDIR/cores/fbneo_libretro_psl1ght.self";
+    candidates[cidx++] = "/dev_hdd0/game/CAVE00002/USRDIR/cores/fbneo_libretro_psl1ght.self";
+    candidates[cidx++] = "/dev_hdd0/game/ARCD00001/USRDIR/cores/fbneo_libretro_psl1ght.self";
+    candidates[cidx] = NULL;
 
     const char *core_path = NULL;
     for (int i = 0; candidates[i]; i++) {
@@ -94,7 +110,6 @@ int main(int argc, char *argv[])
                                 0, 0,
                                 1000, SYS_PROCESS_PRIMARY_STACK_SIZE_1M);
 
-    // If we reach here, spawn failed!
     log = fopen("/dev_hdd0/tmp/launcher.log", "a");
     if (log) {
         fprintf(log, "[LAUNCHER] ERROR: sys_game_process_exitspawn2 failed! errno=%d\n", errno);

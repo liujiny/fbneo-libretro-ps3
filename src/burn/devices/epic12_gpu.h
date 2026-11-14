@@ -18,7 +18,7 @@ static unsigned epic12_gpu_pixels[EPIC12_GPU_BINS];
 static bool epic12_gpu_source_pages[EPIC12_GPU_BINS][EPIC12_VRAM_PAGES];
 static rectangle epic12_gpu_bounds[EPIC12_GPU_BINS];
 static rectangle epic12_gpu_source_bounds[EPIC12_GPU_BINS];
-static bool epic12_gpu_enabled = true;
+static bool epic12_gpu_enabled = false;
 
 enum Epic12GpuFlushReason {
 	EPIC12_GPU_FLUSH_END_LIST = 0,
