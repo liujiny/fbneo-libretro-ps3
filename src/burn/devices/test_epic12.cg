@@ -1,0 +1,67 @@
+struct P {
+    float4 p : POSITION;
+    float2 uv : TEXCOORD0;
+    float2 dst : TEXCOORD1;
+    float4 tint : TEXCOORD2;
+    float4 mode : TEXCOORD3;
+};
+
+uniform float4 atlasScale;
+
+P vs_main(float2 p : POSITION,
+          float2 uv : TEXCOORD0,
+          float4 tint : TEXCOORD1,
+          float4 mode : TEXCOORD2) {
+    P o;
+    o.p = float4(p.x / 256.0 - 1.0, p.y / 256.0 - 1.0, 0.0, 1.0);
+    o.uv = uv * atlasScale.xy;
+    o.dst = p / 512.0;
+    o.tint = tint;
+    o.mode = mode;
+    return o;
+}
+
+sampler2D source : TEXUNIT0;
+sampler2D destination : TEXUNIT1;
+
+float4 ps_fast(P p) : COLOR0 {
+    float4 raw = tex2D(source, p.uv);
+    float4 mode = floor(p.mode + 0.5);
+    float4 tintAlpha = floor(p.tint + 0.5);
+    if (mode.x > 0.5) {
+        if (raw.a < 0.0625) discard;
+    }
+    float3 s = floor(raw.rgb * (255.0 / 8.0) + 0.001);
+    s = min(31.0, floor(s * tintAlpha.rgb / 31.0 + 0.0001));
+    if (mode.z > 2.5 && mode.z < 3.5) s = floor(s * s / 31.0 + 0.0001);
+    float3 outc = s;
+    if (mode.y > 0.5) {
+        if (mode.z > 0.5 && mode.z < 1.5) outc = s;
+        else outc = floor(s * tintAlpha.a / 31.0 + 0.0001);
+    }
+    return float4(outc * (8.0 / 255.0), raw.a);
+}
+
+float4 ps_feedback(P p) : COLOR0 {
+    float4 raw = tex2D(source, p.uv);
+    float4 mode = floor(p.mode + 0.5);
+    float4 tintAlpha = floor(p.tint + 0.5);
+    if (mode.x > 0.5) {
+        if (raw.a < 0.0625) discard;
+    }
+    float3 s = floor(raw.rgb * (255.0 / 8.0) + 0.001);
+    s = min(31.0, floor(s * tintAlpha.rgb / 31.0 + 0.0001));
+    float3 d = floor(tex2D(destination, p.dst).rgb * (255.0 / 8.0) + 0.001);
+    float3 outc;
+    if (mode.z > 3.5 && mode.z < 4.5) {
+        outc = min(31.0, floor((31.0 - d) * s / 31.0 + 0.0001) + floor(d * mode.w / 31.0 + 0.0001));
+    } else if (mode.z > 1.5 && mode.z < 2.5) {
+        outc = min(31.0, floor(d * s / 31.0 + 0.0001) + floor(d * mode.w / 31.0 + 0.0001));
+    } else {
+        outc = floor(s * tintAlpha.a / 31.0 + 0.0001);
+        float3 factor = mode.w;
+        if (mode.z > 0.5 && mode.z < 1.5) factor = s;
+        outc = min(31.0, outc + floor(d * factor / 31.0 + 0.0001));
+    }
+    return float4(outc * (8.0 / 255.0), raw.a);
+}

@@ -15,7 +15,7 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 export OUT
 
-export INC="-Istandalone/gen_mmpork -Istandalone/runtime -Isrc/burner/win32 -Isrc/burner/libretro/libretro-common/include -Isrc/burner/libretro -Isrc/burn -Isrc/cpu -Isrc/cpu/sh4 -Isrc/burn/snd -Isrc/burn/devices -Isrc/intf -Isrc/intf/input -Isrc/intf/cd -Isrc/intf/audio -Isrc/burner -Isrc/dep/libs/zlib"
+export INC="-I/usr/local/cell/target/ppu/include -I/usr/local/cell/target/ppu/include/PSGL -Istandalone/gen_mmpork -Istandalone/runtime -Isrc/burner/win32 -Isrc/burner/libretro/libretro-common/include -Isrc/burner/libretro -Isrc/burn -Isrc/cpu -Isrc/cpu/sh4 -Isrc/burn/snd -Isrc/burn/devices -Isrc/intf -Isrc/intf/input -Isrc/intf/cd -Isrc/intf/audio -Isrc/burner -Isrc/dep/libs/zlib"
 
 export DEF="-D__PS3__ -D__LIBRETRO__ -DWORDS_BIGENDIAN -DSH3_STATIC_REC=1 -DSH3_PPC_DRC_TEST=1 \
 -DSH3_PPC_CACHE_BYTES=(16*1024*1024) -DSALVIA_CV1K_STAMP_PROBE=1 \

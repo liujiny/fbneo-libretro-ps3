@@ -369,6 +369,10 @@ typedef const void (*epic12_device_blitfunction)(
 #include "epic12_blit7.inc"
 #include "epic12_blit8.inc"
 
+#ifdef __PS3__
+#include "epic12_gpu.h"
+#endif
+
 static UINT8 *dips; // pointer to cv1k's dips
 
 static void blitter_delay_callback(int)
@@ -422,6 +426,9 @@ static void run_blitter_cb()
 void epic12_exit()
 {
 	thready.exit();
+#ifdef __PS3__
+	epic12_gpu_exit();
+#endif
 
 #ifdef __PS3__
 	for (UINT32 i = 0; i < EPIC12_SLAB_COUNT; i++) {
@@ -633,6 +640,9 @@ void epic12_reset()
 	m_blitter_busy = 0;
 	sh4_clear_cave_blitter_delay_timer();
 	thready.reset();
+#ifdef __PS3__
+	epic12_gpu_reset();
+#endif
 }
 
 static inline UINT16 READ_NEXT_WORD(UINT32 *addr)
@@ -716,6 +726,10 @@ static void gfx_upload(UINT32 *addr)
 
 	if (dst_x_start + dimx > 8192) dimx = 8192 - dst_x_start;
 	if (dst_y_start + dimy > 4096) dimy = 4096 - dst_y_start;
+
+#ifdef __PS3__
+	epic12_gpu_cpu_write(dst_x_start, dst_y_start, dimx, dimy, EPIC12_GPU_FLUSH_CPU_UPLOAD);
+#endif
 
 	//bprintf(0, _T("GFX COPY: DST %02X,%02X,%03X DIM %02X,%03X\n"), dst_p,dst_x_start,dst_y_start, dimx,dimy);
 
@@ -999,6 +1013,27 @@ static void gfx_draw(UINT32 *addr)
 	dimx    =   (w & 0x1fff) + 1;
 	dimy    =   (h & 0x0fff) + 1;
 
+	// Fast clip rejection
+	if (x > m_clip.max_x || y > m_clip.max_y || x + dimx - 1 < m_clip.min_x || y + dimy - 1 < m_clip.min_y) {
+		return;
+	}
+
+#ifdef __PS3__
+	// Direct stream execution for off-screen staging blits (x >= 768, non-blended 2-pixel columns)
+	if (x >= 768 && !blend && dimx == 2 && dimy >= 8) {
+		const UINT32 cur_addr = *addr - 20;
+		Epic12StagingColumns cols;
+		unsigned ccount = epic12_staging_collect_columns(m_ram16_copy, m_main_rammask, cur_addr,
+			m_clip.min_x, m_clip.min_y, m_clip.max_x, m_clip.max_y, cols);
+		if (ccount > 0) {
+			epic12_staging_draw_columns_ps3(x, y, cols);
+			epic12_gpu_cpu_write(x, y, cols.width, cols.height, EPIC12_GPU_FLUSH_CPU_DRAW);
+			*addr = cur_addr + ccount * 20;
+			return;
+		}
+	}
+#endif
+
 	// convert parameters to clr
 
 
@@ -1019,6 +1054,13 @@ static void gfx_draw(UINT32 *addr)
 	// surprisingly frequent, need to verify if it produces a worthwhile speedup tho.
 	if ((s_mode==0 && s_alpha==0x1f) && (d_mode==4 && d_alpha==0x1f))
 		blend = 0;
+
+#ifdef __PS3__
+	if (epic12_gpu_submit(flipx, trans, blend, s_mode, d_mode, draw_params)) {
+		return;
+	}
+	epic12_gpu_cpu_draw(x, y, dimx, dimy, m_clip);
+#endif
 
 	if (tinted)
 	{
@@ -1242,6 +1284,9 @@ static void gfx_exec()
 		{
 			case 0x0000:
 			case 0xf000:
+#ifdef __PS3__
+				epic12_gpu_flush(EPIC12_GPU_FLUSH_END_LIST);
+#endif
 				return;
 
 			case 0xc000:
@@ -1264,6 +1309,9 @@ static void gfx_exec()
 
 			default:
 				//popmessage("GFX op = %04X", data);
+#ifdef __PS3__
+				epic12_gpu_flush(EPIC12_GPU_FLUSH_OTHER);
+#endif
 				return;
 		}
 	}

@@ -12,7 +12,7 @@ PPU="$WINE /usr/local/cell/host-win32/ppu/bin"
 JOBS="${JOBS:-$(nproc)}"
 
 CF="-O3 -mcpu=cell -mtune=cell -maltivec -mabi=altivec -fstrict-aliasing -fomit-frame-pointer -ffast-math -mminimal-toc -std=gnu++98"
-BASEINC="-Istandalone/gen -Istandalone/runtime -Isrc/burner/win32 -Isrc/burner/libretro/libretro-common/include -Isrc/burner/libretro -Isrc/burn -Isrc/cpu -Isrc/cpu/sh4 -Isrc/burn/snd -Isrc/burn/devices -Isrc/intf -Isrc/intf/input -Isrc/intf/cd -Isrc/intf/audio -Isrc/burner -Isrc/dep/libs/zlib"
+BASEINC="-I/usr/local/cell/target/ppu/include -I/usr/local/cell/target/ppu/include/PSGL -Istandalone/gen -Istandalone/runtime -Isrc/burner/win32 -Isrc/burner/libretro/libretro-common/include -Isrc/burner/libretro -Isrc/burn -Isrc/cpu -Isrc/cpu/sh4 -Isrc/burn/snd -Isrc/burn/devices -Isrc/intf -Isrc/intf/input -Isrc/intf/cd -Isrc/intf/audio -Isrc/burner -Isrc/dep/libs/zlib"
 INC="${INC:-$BASEINC}"
 BASEDEF="-D__PS3__ -D__LIBRETRO__ -DWORDS_BIGENDIAN -DFRONTEND_SUPPORTS_RGB565=1 -DFBNEO_DEFAULT_AUDIO_RATE=44100 -DPS3_MEMORY_DIAGNOSTIC=1 -DPS3_MEMORY_POOL_SIZE_MB=8 -DPS3_NATIVE_MEMORY=1 -DPS3_PGM_MASK_FILE_CACHE=1 -DPS3_PGM_COLOR_FILE_CACHE=1"
 DEF="${DEF:-$BASEDEF}"
